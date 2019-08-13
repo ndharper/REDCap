@@ -27,6 +27,11 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
 from openpyxl.worksheet.pagebreak import Break
 from copy import copy
+import re
+from pythonds.trees import BinaryTree
+from pythonds.basic import Stack
+
+
 
 # subroutine to process a variable and return the value
 # for some field types the returned value is stored directly in the redcap data
@@ -56,7 +61,7 @@ def process_fields(var,entry,meta):
         return result
 
 
-    for m_ent in meta:      # find the appropriate entry in the metadat
+    for m_ent in meta:      # find the appropriate entry in the metadata
         if var==m_ent['field_name'] :   
             var_type=m_ent['field_type']   # get the type
             break
@@ -139,7 +144,7 @@ def process_fields(var,entry,meta):
         
         elif text_type=='integer':          # integer, return integer value
             result = (entry[var],int(entry[var]))
-            print(var,entry[var],int(entry[var]),result)
+#            print(var,entry[var],int(entry[var]),result)
             return result
         elif text_type=='number':       # float, rteturn floating point number
             result = (entry[var],float(entry[var]))
@@ -163,9 +168,73 @@ def process_fields(var,entry,meta):
     return          # should never get here but return None signals that we've met a data type or a validation we 
                     # didn't plan for
         
-        
+# parse the branching logic
 
-  
+        
+def parse_branch(var,meta,my_event,big_data):
+    rvar_pat=re.compile(r'\[(.*?)\]')
+    str_pat=re.compile(r'\'(.*?)\'')
+    paren_pat=re.compile(r'\((.*?)\)')
+    operators={
+            '=':'=',
+            '>=':'>=',
+            '=>':'>=',
+            '<=':'<=',
+            '=<':'<=',
+            '!=':'!=',
+            '<>':'!=',
+            'and':'and',
+            'or':'or',
+            ')':')',
+            '(':'('}
+    
+    
+            
+    out_list=[]
+    for entry in meta:
+        if entry['field_name']==var:
+            break
+    
+    if entry['field_name'] != var:
+        return                          # this will happen if the var isn't in the meta data list - error
+    
+    if entry['branching_logic'] =='':
+        return                          # we've found it but it doesn't have any branching logic
+    
+    terms = entry['branching_logic'].split()    # now we should have alist of individual terms
+#    
+    for term in terms:
+        matches=rvar_pat.findall(term)              # looking for redcap variable
+        if len(matches)==1:                         # we've only got a single term so it must be in current entry
+            a=paren_pat.sub('___\g<1>',matches[0]) # subsitute baby(1) = baby___1
+#            print(a,entry)
+            out_list.append(my_event[a.lower()])
+#            print(a,my_event)
+        elif len(matches)==2:                       # if there are two [xxx][yyy] then we have both an event and a variable 
+            for entry2 in big_data:                  # search through all of big data
+                if matches[0]==entry2['redcap_event_name']:
+                    a=paren_pat.sub('___\g<1>',matches[1]) # subsitute baby(1) = baby___1
+                    out_list.append(entry2[a.lower()])
+                    break
+        else:                      
+        # not a redcap variable.  Lok for string argument wrapped in quotes
+            
+            matches=str_pat.findall(term)       # should return either 0 or 1 entries
+            if len(matches)>0:
+                out_list.append(matches[0])     # will strip the wrapping quotes
+            
+        # search for operators or paren
+            elif term.strip() in operators:
+                out_list.append('%$*&'+term.strip())
+        
+            else:
+                out_list.append(term)            
+            
+   
+#    print(terms,out_list)
+    return out_list     # should tokenise
+        
+      
 
 
 
@@ -235,6 +304,9 @@ for var in meta:
 #   process the value found in that event.  We will have to loop through all
 #    data because there may be multiple instances of the event
     
+
+f = open('testout.txt','w+')  # test output
+
 for var_code in codebook:        # codebook is a list of tuples
         var = var_code[0]
         form = var_code[1]      # this is the form name
@@ -253,8 +325,16 @@ for var_code in codebook:        # codebook is a list of tuples
                         result = process_fields(var,entry,meta)
                         if result==None:
                             sys.exit('Parser failure')
-                        print(var,event,entry['redcap_repeat_instance'],result)
-                        
+                        branch_str=parse_branch(var,meta,entry,big_data)
+                        if branch_str!=None:  # any branching logic
+                            print(var,branch_str)
+                            
+                            
+                            
+                            
+                            
+                            
+#f.close
                         
                         
                         
