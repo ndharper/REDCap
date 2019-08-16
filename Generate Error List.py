@@ -235,6 +235,52 @@ def parse_branch(var,meta,my_event,big_data):
     return out_list     # should tokenise
         
       
+# build parrse tree from expression
+def buildParseTree(fplist):
+    operators = ['%$*&=',
+                 '%$*&>=',
+                 '%$*&>=',
+                 '%$*&<=',
+                 '%$*&<=',
+                 '%$*&!=',
+                 '%$*&!=',
+                 '%$*&and',
+                 '%$*&or',
+                 ]
+    
+    pStack = Stack()
+    eTree = BinaryTree('')
+    pStack.push(eTree)
+    currentTree = eTree
+
+    for i in fplist:
+        if i == '%$*&(':
+            currentTree.insertLeft('')
+            pStack.push(currentTree)
+            currentTree = currentTree.getLeftChild()
+
+        elif i in operators:
+            currentTree.setRootVal(i)
+            currentTree.insertRight('')
+            pStack.push(currentTree)
+            currentTree = currentTree.getRightChild()
+
+        elif i == '%$*&)':
+            currentTree = pStack.pop()
+
+        else:
+            
+            currentTree.setRootVal(i)
+            parent = pStack.pop()
+            currentTree = parent
+
+
+
+    return eTree
+
+
+
+
 
 
 
@@ -327,7 +373,8 @@ for var_code in codebook:        # codebook is a list of tuples
                             sys.exit('Parser failure')
                         branch_str=parse_branch(var,meta,entry,big_data)
                         if branch_str!=None:  # any branching logic
-                            print(var,branch_str)
+                            print(branch_str)
+#                            buildParseTree(branch_str)
                             
                             
                             
