@@ -31,6 +31,10 @@ class BinaryTree:
         self.left=None
         self.right = None
 
+
+
+   
+    
     # get and set functions for value and children
     
     def getValue(self):
@@ -45,6 +49,16 @@ class BinaryTree:
     def getRightChild(self):
         return self.right
     
+    # is it a leaf?
+    def isLeaf(self):
+        return self.left == None and self.right == None
+
+    # move up one level
+  
+    def upTree(self):
+        return self.parent
+        
+        
     # set functions.  There isn't one for parent.  Use insertLeftAbove or insertRightAbove
     
     def setValue(self,obj):
@@ -174,6 +188,29 @@ class BinaryTree:
         self.right = n 
         n.parent = self
         return n
+    
+    # Insert for parsing algorithm.  This will insert the new node as right child
+    # of the current node but will add the current node's old RIGHT child as the
+    # LEFT child of the new node.  It will return the new node
+    
+    def insertBelowCross(self,node):
+        if isinstance(node,BinaryTree): # adding a node or a tree
+            n=node
+        else:
+            n=BinaryTree(node)
+            
+        n.parent = self             # set the parent of the new node
+        if isinstance(self.right,BinaryTree):
+            self.right.parent=n     # set the parent of the downstrem to be the new node
+        
+        n.left = self.right         # move the old right child.  May be None
+        self.right = n              # now the current node points to new node
+        
+        
+        
+        return n                    # return the new node 
+    
+    
     
     # print out tree
     def print_tree(self):
