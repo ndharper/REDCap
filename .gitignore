@@ -1,0 +1,25 @@
+*.xlsx
+*.xls
+*.xlsm
+*.dta
+*.sav
+*.txt
+*.csv
+*.docx
+*.tsv
+!Codebook for Error Check.xlsx
+*.smcl
+*.log
+*.json
+*/
+*.db
+*.doc
+*.pdf
+*.7z
+*.msg
+*.lnk
+*.accdb
+*.ktr
+*.PNG
+*.ini
+
