@@ -3,7 +3,7 @@
 Created on Thu Sep 19 13:29:37 2019
 @author: nicholas harper
 Tokenise a REDCap expression.  These are found in redcap field calculations
-and branching logic and are used with xternal database testing.  Alorithm
+and branching logic and are used with external database testing.  Algorithm
 derived from Gareth Reese's post
 https://codereview.stackexchange.com/questions/186024/basic-equation-tokenizer
 looks for additional syntax not found in REDCap:
@@ -11,7 +11,6 @@ looks for additional syntax not found in REDCap:
     opposite quite unescaped
     includes unary not operator
     includes in function.  Returns true if value is found in list
-    comma seperator for if and in functions
     allows for operator aliases, e.g <= and =>
 """
 from enum import Enum
@@ -55,7 +54,7 @@ _token_re = re.compile(r"""
 |sqrt                   # square root
 |mean                   # mean - argument is list
 |median                 # median - argument is list
-|stdev                  # standartd deviation of list
+|stdev                  # standard deviation of list
 |roundup                # roundup - argument and places
 |rounddown              # rounddown
 |round                  # round
@@ -107,7 +106,7 @@ def tokenise(s):
         elif match.group('Rvar'):   # might get one or more arguments
             # force whitespace between adjacent [..]terms and then split on it
             ss = match.group('Rvar').replace('][', '] [').split()
-            r = ()  # empty tuiple
+            r = ()  # empty tuple
             for a in ss:  # fill it with the terms, discarding brackets
                 r = r + (a[1:-1],)  # create a tuple of arguments
             yield Token.RCAP_VAR, r
