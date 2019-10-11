@@ -234,7 +234,7 @@ def getPrec(node):
     """
     returns the precedence of a node.  Nodes representing operators
     will have values consisting of (operator, precedence) tuples
-    operands will contain an elemental value.  Operators are given max
+    operands will contain an elemental value.  Operands are given max
     value precedence
     """
     cur_val = node.getValue()   # this will get the current precedence
