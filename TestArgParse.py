@@ -161,7 +161,7 @@ def tokenise(s):
             yield Token.SEP, match.group('seps')
         # unrecognised.  error
         else:
-            print('Parsing error: expected a token '
+            print('    : expected a token '
                   'but found {} at position {}'.format(match.group('errs'),
                                                        match.span(),
                                                        file=sys.stderr))
