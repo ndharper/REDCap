@@ -13,6 +13,7 @@ import os
 import subprocess
 import glob
 import io
+import itertools
 urllib3.disable_warnings()
 from redcap import Project, RedcapError
 from requests import post
@@ -487,23 +488,25 @@ def clean_participant(data_acc):
         if r['redcap_event_name']=='administrative_inf_arm_1':
             if r['void_participant']=='1':
                 return []           # void participant so return an empty list
-            break # found the admin_info so don't keep looking
+
             
     # now get rig of any pilot or disabled scans
     scans =0
+    data = []
     for r in data_acc:
-      if r['redcap_event_name'] in ['neonatal_scan_arm_1','fetal_scan_arm_1']:
+        if r['redcap_event_name'] in ['neonatal_scan_arm_1','fetal_scan_arm_1']:
             if r['scan_disabled']=='1' or r['scan_pilot'] =='1':
-                data_acc.remove(r)      # get rid of it
+                continue
             else:
-                scans +=1           # increment the counter
+                scans += 1
+        data.append(r)    
                 
     # if we didn't find any scans then return empty list
     
     if scans ==0:
         return []
     else:
-        return data_acc
+        return data
         
 
 
@@ -600,7 +603,6 @@ def process_participant(data,meta,fem,codebook):
                                         
     return
         
-
     
 #  new comment
 
@@ -613,7 +615,7 @@ parser.add_argument('--all', dest='export_disabled', action='store_const',
 
 args = parser.parse_args()
 
-records_of_interest = args.records_of_interest
+#records_of_interest = args.records_of_interest
 
 
 # fetch API key from ~/.redcap-key ... don't keep in the source
