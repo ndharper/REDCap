@@ -22,6 +22,7 @@ import datetime
 import pycurl
 import certifi
 import json
+import itertools
 import argparse
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
@@ -599,21 +600,89 @@ def process_participant(data,meta,fem,codebook):
 
                                         
     return
-        
 
-    
-#  new comment
+def _participant_(rec):
+    """function to return the participantid for this record"""
+    return rec['participationid']
+
+
+def return_data(ibd):
+    """
+    return a list of records for a single participant.  need to pass an
+    iterator of big_data.  big_data doesn't
+    need to be sorted in any particular order but records for a given
+    participant must be adjacent
+    """
+    grouped_data = itertools.groupby(ibd, _participant_)
+    for key, gen in grouped_data:
+
+        data = list(gen)
+        scans = 0
+        selector = []  # will use to filter data later
+        for rec in data:
+            selector.append(True)
+            # void participant
+            if args.void and rec['redcap_event_name'] ==\
+                    'administrative_inf_arm_1' and \
+                    rec['void_participant'] == '1':
+                data = []  # chuck everything out
+                break  # we're done with this participant
+
+            # check the scan records for void or disabled
+            if rec['redcap_event_name'] in ['neonatal_scan_arm_1',
+                                            'fetal_scan_arm_1']:
+                if (args.disabled and rec['scan_disabled'] == '1') or\
+                 (args.pilot == 0 and rec['scan_pilot'] == '1'):
+                    selector[-1] = False  # de-select this record
+                    print('bum scan {} {} disabled {} pilot {}'.
+                          format(rec['participationid'],
+                                 rec['redcap_event_name'],
+                                 rec['scan_disabled'],
+                                 rec['scan_pilot']))
+                else:
+                    scans += 1  # found a good scan
+
+        if args.noscan and scans == 0 or len(data) <= 0:
+            data = []  # clear
+
+        else:
+            data = list(itertools.compress(data, selector))
+            yield data
+
 
 parser = argparse.ArgumentParser(description='RedCap REST client')
-parser.add_argument('records_of_interest', metavar='ID', type=str, nargs='+',
+parser.add_argument('--dictionary', type=str,
+                    default='Codebook for Error Check.xlsx [Working Copy]',
+                    help='''Dictionary file with variables to check
+                    If dictionary file is an Excel workbook then specification
+                    can be followed by an optional worksheet name enclosed in
+                    square brackets ([]).  If no worksheet name is given then
+                    the first sheet in the workbook will be used.  If file
+                    does not have an extension .xlx, .xlsx, .xlsb or .xlsm
+                    then it will be processed as an ordinary comma seperated
+                    test file''')
+parser.add_argument('--output', type=argparse.FileType('w'),
+                    default='dHCPmissing.txt',
+                    help='Output file')
+parser.add_argument('--pilot', action='count', default=0,
+                    help='''--p means include pilot scans in deciding whether
+                    to processs a record but ignore any data in it.
+                    --pp means process the data from pilot scans too''')
+parser.add_argument('--void', action='store_false',
+                    help='include void participant records')
+parser.add_argument('--reuse', action='store_true',
+                    help='''don\'t reload REDCap DB if it\'s already present in
+                    memory.  This will safe time during testing''')
+parser.add_argument('--disabled', action='store_false',
+                    help='include disabled scan records')
+parser.add_argument('--noscan', action='store_false',
+                    help='include records with no scans at all')
+parser.add_argument('--xlimits', action='store_true',
+                    help='''override maximum and minimum limits on variable
+                    values in the meta data with values from the dictionary''')
+parser.add_argument('records_of_interest', metavar='ID', type=str, nargs='*',
                     help='a list of subject IDs to fetch metadata from')
-parser.add_argument('--all', dest='export_disabled', action='store_const',
-                    const=True, default=False,
-                    help='export all subject sessions even when marked as disabled (default: exclude disabled)')
-
 args = parser.parse_args()
-
-records_of_interest = args.records_of_interest
 
 
 # fetch API key from ~/.redcap-key ... don't keep in the source
@@ -623,9 +692,144 @@ if not os.path.isfile(key_filename):
     sys.exit(1)
 api_key = open(key_filename, 'r').read().strip()
 
-
-api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'
+api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dHCP specific
 project = Project(api_url, api_key)
+
+
+"""
+Check and see if the dictionary file is an Excel spreadsheet.  If it isn't,
+assume it's a comma seperated file.  Excel file specification will be of the
+form filespec.xl* optionally followed by [Worksheet]. [] are used to contain
+the worksheet name beacuse those characters won't occur in the full filespec.
+If no worksheet is specified then program will use the active sheet in the
+workbook.
+If file extension isn't .xls* then assume it's a comma seperated file with the
+column headers in the first row
+"""
+
+fpat = re.compile(r'\s*(?P<file>.*xls[xmb]?)\s*(\[\s*(?P<sheet>.*)\b)')
+match = fpat.match(args.dictionary)
+
+# build the dictionary
+dictionary = {}
+if match:  # if we matched then it's an Excel file
+    print('reading Excel File')
+    # read the data dictionary
+    dict_cols = {}
+    infile = load_workbook(match.group('file'))
+    if match.group('sheet'):
+        source = infile[match.group('sheet')]
+    else:
+        source = infile.active
+    dg = source.iter_rows(min_row=1, values_only=True)
+    header = next(dg, None)
+    '''
+    Build a dictionary of dictionaries.  Top level uses the variable name
+    from ist column as a kdictey with value equal to a dictionary of all the
+    other variables in the row with each getting a key equal to the column
+    heading
+    '''
+    ig_col = header.index('Ignore') if 'Ignore' in header else -999
+
+    for rec in dg:
+        if ig_col >= 0:
+            if rec[ig_col] in ['Yes', 1, True]:
+                continue
+        dic_entry = {}
+        for i in range(1, len(header)):
+            dic_entry[header[i]] = rec[i]
+
+        dictionary[rec[0]] = dic_entry
+
+    infile.close()
+
+else:
+    print('reading .csv file')
+    with open(args.dictionary, 'r') as infile:
+        inreader = csv.reader(infile)
+        headers = next(inreader, None)
+        ig_col = header.index('Ignore') if 'Ignore' in header else -999
+        dictionary = {}
+        for rec in inreader:
+            if ig_col > 0:
+                if rec[ig_col] in ['Yes', 1, True]:
+                    continue
+            dic_entry = {}
+            for i in range(1, len(header)):
+                dic_entry[header[i]] = rec[i]
+            dictionary[rec[0]] = dic_entry
+
+"""
+Check date format.  We can distinguish betweem date and datetime but we don't
+have any good way of distinguishing between day-month-year and month-day-year
+To address scan the dictionary looking for the text validation values
+We have to assume that we won't have a mixture of US and normal dates in the
+same project
+"""
+_American_Date_ = False
+for r in dictionary.values():
+    if r['Field Type'] == 'text':
+        ft = r['Text Validation Type OR Show Slider Number']
+        if ft:
+            if ft.find('mdy') >= 0:
+                _American_Date_ = True
+                
+"""
+get the data from REDCap.  Will retrieve three lists:
+    big_data is a list of all the data
+    meta is the meta data
+    fem is the form event mapping
+this takes some time so running interactively we can save time by not reading
+again if the data already exists.  Will assume that if big_data exists then
+so do meta and fem.  Note that if records_of_interest were specified on the
+load and --reuse is specified then the record list doesn't get updated
+"""
+
+try:
+    big_data  # does it exist?
+except NameError:
+    args.reuse = False  # force a load
+if not args.reuse:
+    print('loading REDCap data')
+    # fetch API key from ~/.redcap-key ... don't keep in the source
+    key_filename = os.path.expanduser('~') + '/.redcap-key'
+    if not os.path.isfile(key_filename):
+        print('redcap key file {} not found'.format(key_filename),
+              file=sys.stderr)
+        sys.exit(1)
+    api_key = open(key_filename, 'r').read().strip()
+
+    api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dhcp specific
+    project = Project(api_url, api_key)
+
+    fields_of_interest = list(dictionary.keys())
+    try:
+        big_data = project.export_records(fields=fields_of_interest,
+                                          records=args.records_of_interest,
+                                          format='json')
+    except RedcapError:
+        print('Redcap export too large', file=sys.stderr)
+        sys.exit(1)
+
+    meta = project.export_metadata()                # metadata
+    fem = project.export_fem()                      # form event mappings
+    """
+    copy any meta fields that aren't in the dictionary into it.  If field
+    already exists then over-ride it with the exception of
+    text_validation_min and max. Those will be spared if --xlimits flag
+    is set to allow us to use the limits from the external dictionary.
+    This step allows us to use dictionary rather than meta everywhere.
+    dictionary is a dictionary of disctionaries rather than a list
+    of dictionaries so field lookup is faster
+    """
+    for row in meta:
+        if row['field_name'] in dictionary:
+            for key, value in row.items():
+                if (key != 'field_name' and
+                        not (args.xlimits and
+                             key.startswith('text_validation'))):
+                    dictionary[row['field_name']][key] = value
+
 
 # open the Excel workbook that has the variables to check
 
@@ -636,55 +840,41 @@ codebook=[]                         # we're going to load the whole codebook for
 
 # read the codebook into memory so we don't have to keep accessing the spreadsheey 
 codebook=[]                         # we're going to load the whole codebook for ease of processing
-fields_of_interest=[]               # build a list of fields for the pycap import
-for row in source.iter_rows(min_row=2,values_only=True):
+fields_of_interest = []               # build a list of fields for the pycap import
+for row in source.iter_rows(min_row=2, values_only=True):
     if row[19] != 'Yes':
         codebook.append(row)
         fields_of_interest.append(row[0])
 
-# now get the data for this record
 
-meta = project.export_metadata()                # metadata
-fem = project.export_fem()                      # form event mappings
-
-# export all records
-
-big_data=project.export_records(fields=fields_of_interest,format='json')    # here's the data it'self
-
-
-#big_data = sorted(big_data,key=itemgetter('participationid'))   # sort by participation id.  Shouldn't be needed
-
-# now we need to loop through and find all the records belonging to each participant in turn and build as a subset
-# we need to do this because otherise the branching logic calculations would have to loop through the whole set
-# each time to find the right record
-
-currentid = ''      # this the id that we're working on right now
-data =[]            # build a list of records
-
+#currentid = ''      # this the id that we're working on right now
+#data =[]            # build a list of records
+#
 out = open('dHCPmissing.txt','w',newline='')
 out_write=csv.writer(out,quotechar="'",delimiter='\t')
 out_write.writerow(['participant','event','event_repeat','variable','error','value'])
+#
+#for record in big_data:
+#    if record['participationid'] !=currentid :   # have we fount a new participant
+#        # process the records we already found
+#        # we're going to some garbage collection and then see if we've got anything left
+#        data=clean_participant(data)        # go do the garbage collection
+#        if len(data)>0:                     # have we got any?
+#            process_participant(data,meta,fem,codebook)           # yes: process them
+#     
+#        currentid = record['participationid']     # new participant
+#        data = [record]                      # start the list
+#    else:
+#        data.append(record)                    # add the record onto the list
+#
+#
+#  
+# data=clean_participant(data) # process the last participant
 
-for record in big_data:
-    if record['participationid'] !=currentid :   # have we fount a new participant
-        # process the records we already found
-        # we're going to some garbage collection and then see if we've got anything left
-        data=clean_participant(data)        # go do the garbage collection
-        if len(data)>0:                     # have we got any?
-            process_participant(data,meta,fem,codebook)           # yes: process them
-     
-        currentid = record['participationid']     # new participant
-        data = [record]                      # start the list
-    else:
-        data.append(record)                    # add the record onto the list
-
-
-        
-data=clean_participant(data) # process the last participant
-
-
-if len(data)>0:                     # have we got any?
-    process_participant(data,meta,fem,codebook)           # yes: process them   
+ibd = iter(big_data)  # create iterable
+for data in return_data(ibd):
+    if len(data) > 0:                     # have we got any?
+        process_participant(data, meta, fem, codebook)           # yes: process them   
 
 out.close() # close the output file
 

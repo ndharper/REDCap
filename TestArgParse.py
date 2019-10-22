@@ -677,19 +677,31 @@ for r in dictionary.values():
                 AMERICAN_DATE = True
 
 """
-Now read the data from REDCap
-May fail if we try to read to many variables from too many records
-limit not hard but approx recors * variables < 1,000,000
+get the data from REDCap.  Will retrieve three lists:
+    big_data is a list of all the data
+    meta is the meta data
+    fem is the form event mapping
+this takes some time so running interactively we can save time by not reading
+again if the data already exists.  Will assume that if big_data exists then
+so do meta and fem.  Note that if records_of_interest were specified on the
+load and --reuse is specified then the record list doesn't get updated
 """
+
+try:
+    big_data  # does it exist?
+except NameError:
+    print('loading REDCap data')
+    args.reuse = False  # force a load
 if not args.reuse:
     # fetch API key from ~/.redcap-key ... don't keep in the source
     key_filename = os.path.expanduser('~') + '/.redcap-key'
     if not os.path.isfile(key_filename):
-        print('redcap key file {} not found'.format(key_filename))
+        print('redcap key file {} not found'.format(key_filename),
+              file=sys.stderr)
         sys.exit(1)
     api_key = open(key_filename, 'r').read().strip()
 
-    api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'
+    api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dhcp specific
     project = Project(api_url, api_key)
 
     fields_of_interest = list(dictionary.keys())
@@ -697,18 +709,19 @@ if not args.reuse:
         big_data = project.export_records(fields=fields_of_interest,
                                           records=args.records_of_interest,
                                           format='json')
-
     except RedcapError:
-        print('Redcap export too large')
+        print('Redcap export too large', file=sys.stderr)
+        sys.exit(1)
 
     meta = project.export_metadata()                # metadata
+    fem = project.export_fem()                      # form event mappings
     """
     copy any meta fields that aren't in the dictionary into it.  If field
     already     exists then over-rtide it with teh exception of
     text_validation_min and max.     Those will be spared if --xlimits flag
     is set to allow us to use the limits from the external dictionary.
     This step allows us to use dictionary rather than meta everywhere.
-    dictionary     is a dictionary of disctionaries rather than a list
+    dictionary is a dictionary of disctionaries rather than a list
     of dictionaries so field lookup is faster
     """
     for row in meta:
@@ -717,7 +730,7 @@ if not args.reuse:
                     not (args.xlimits and key[0:15] == 'text_validation')):
                 dictionary[row['field_name'][key]] = value
 
-    fem = project.export_fem()                      # form event mappings
+
 
 """
 Main body of the program. For each partipant in turn we need to group all the
