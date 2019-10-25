@@ -1,22 +1,58 @@
-
 # -*- coding: utf-8 -*-
 """
-Created on Thu Sep 19 13:29:37 2019
-@author: nicholas harper
-Tokenise a REDCap expression.  These are found in redcap field calculations
-and branching logic and are used with external database testing.  Algorithm
-derived from Gareth Reese's post
-https://codereview.stackexchange.com/questions/186024/basic-equation-tokenizer
-looks for additional syntax not found in REDCap:
-    strings can be enslosed in single or double quotes and can contain the
-    opposite quite unescaped
-    includes unary not operator
-    includes in function.  Returns true if value is found in list
-    allows for operator aliases, e.g <= and =>
+Created on Thu Oct 10 14:45:32 2019
+
+@author: ndr15
 """
-from enum import Enum
-import re
+
+
+import urllib3
 import sys
+import os
+import subprocess
+import glob
+import io
+urllib3.disable_warnings()
+from redcap import Project, RedcapError
+from requests import post
+from pathlib import Path
+import smtplib
+import datetime
+import pycurl
+import certifi
+import json
+import argparse
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
+from openpyxl.worksheet.pagebreak import Break
+from copy import copy
+import re
+import csv
+from BinaryTree import BinaryTree
+from operator import itemgetter
+
+class Stack:
+     def __init__(self):
+         self.items = []
+
+     def isEmpty(self):
+         return self.items == []
+
+     def push(self, item):
+         self.items.append(item)
+
+     def pop(self):
+         return self.items.pop()
+
+     def peek(self):
+         return self.items[len(self.items)-1]
+
+     def size(self):
+         return len(self.items)
+
+
+from enum import Enum
+
 
 
 _token_re = re.compile(r"""
@@ -41,6 +77,7 @@ _token_re = re.compile(r"""
 |=<                     # logical less than or equal
 |>                      # logical greater than
 |<                      # logical less than
+|=                      # logical equal to
 |\+                     # arithmetic or unary add
 |\-                     # arithmetic or unary minus
 |\*                     # arithmetic multiply
@@ -68,12 +105,6 @@ _token_re = re.compile(r"""
                     # anything else - error
 |(?P<errs>\S[a-zA-Z0-9_\.]*)
                       """, re.VERBOSE)
-
-
-s = """if(datediff('01-01-1600',[mother_dob],'M',trash'dmy',true)< 1000,\
-round(datediff('01-01-1600',[enrolment_arm_1][mother_dob][2],\
-'M','dmy',true),0)-999, round(datediff([mother_dob],\
-[agreededd],'y','dmy',true),0))+73.2 rubish"""
 
 
 class Token(Enum):
@@ -127,3 +158,45 @@ def tokenise(s):
                                                        match.span(),
                                                        file=sys.stderr))
             yield Token.ERR, match.group('errs')
+
+
+def return_rcap(tup, entry, data, dictionary):
+    """
+    return the value pointed to by [<event>]<[instance]
+    this will need more work to accomodate full smart variables
+    but that can wait until we've replaced PyCap
+    """
+    if len(tup) == 1:
+        res = process_fields()
+    for e in tup:
+        if e in dictionary:
+            var = e
+            break
+        for ev in data:
+            id ev[redcap_event_name] == e
+            break
+        if tup[-1]    
+    
+
+s = """[m_sib_adhd_sch_12f] = '1' or [m_sib_adhd_sch_12f] = '2' or
+[m_sib_adhd_sch_12f] = '3' or [xyz][m_sib_adhd_sch_12f] = '4' or
+[m_sib_adhd_sch_12f] = '5' or [m_sib_adhd_sch_12f][2] = '6' or
+[m_sib_adhd_sch_12f] = '7' or [abc][m_sib_adhd_sch_12f][3] = '8' or
+[m_sib_adhd_sch_12f] = '9' or [m_sib_adhd_sch_12f] = '10'
+"""
+left_bracket = ('(', 0)  # highest precedence
+TreeRoot = BinaryTree(left_bracket)  # dummy an initial left bracket tuple node
+CurrentNode = TreeRoot
+
+for a in tokenise(s):
+    if a == Token.CONST:  # operand
+        CurrentNode = CurrentNode.insertBelowCross(a)
+
+    elif a == Token.RCAP_VAR:  # Redcap variable
+        """
+        decode the redcap variable.  Value is a tuple equating to
+        [<event>]<variable>[<redcap_repeat_instance>|<smart variable>]
+        """
+        rvar = return_rcap(a)
+            
+
