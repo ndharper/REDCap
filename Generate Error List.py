@@ -544,7 +544,7 @@ def process_participant(data,meta,fem,codebook):
                     'post_scan_events': ['post_scan_event_arm_1']
                     }
         var = var_code[0]
-#            print(var)
+#          conda version  print(var)
         form = var_code[1]      # this is the form name
         var_type = var_code[3]    # field type
         if var_code[19] == "Yes":
@@ -626,25 +626,36 @@ def return_data(ibd):
                     'administrative_inf_arm_1' and \
                     rec['void_participant'] == '1':
                 data = []  # chuck everything out
+                print('participant {} is a void record'.
+                      format(rec['participationid']))
+                data = []  # ditch everything
                 break  # we're done with this participant
 
             # check the scan records for void or disabled
             if rec['redcap_event_name'] in ['neonatal_scan_arm_1',
                                             'fetal_scan_arm_1']:
-                if (args.disabled and rec['scan_disabled'] == '1') or\
-                 (args.pilot == 0 and rec['scan_pilot'] == '1'):
+                if args.disabled and rec['scan_disabled'] == '1':
                     selector[-1] = False  # de-select this record
-                    print('bum scan {} {} disabled {} pilot {}'.
+                    print('participant {} {} {} marked disabled'.
                           format(rec['participationid'],
                                  rec['redcap_event_name'],
-                                 rec['scan_disabled'],
-                                 rec['scan_pilot']))
+                                 rec['redcap_repeat_instance']))
+                elif args.pilot == 0 and rec['scan_pilot'] == '1':
+                    selector[-1] = False  # de-select this record
+                    print('participant {} {} {} is a pilot scan'.
+                          format(rec['participationid'],
+                                 rec['redcap_event_name'],
+                                 rec['redcap_repeat_instance']))
                 else:
                     scans += 1  # found a good scan
 
-        if args.noscan and scans == 0 or len(data) <= 0:
+        if len(data) <= 0:
+            continue  # would have benn a void and we've already printed
+        elif args.noscan and scans == 0:
+            print('participant {} has no usable scans'.
+                  format(rec['participationid']))
             data = []  # clear
-
+            continue
         else:
             data = list(itertools.compress(data, selector))
             yield data
@@ -853,23 +864,7 @@ for row in source.iter_rows(min_row=2, values_only=True):
 out = open('dHCPmissing.txt','w',newline='')
 out_write=csv.writer(out,quotechar="'",delimiter='\t')
 out_write.writerow(['participant','event','event_repeat','variable','error','value'])
-#
-#for record in big_data:
-#    if record['participationid'] !=currentid :   # have we fount a new participant
-#        # process the records we already found
-#        # we're going to some garbage collection and then see if we've got anything left
-#        data=clean_participant(data)        # go do the garbage collection
-#        if len(data)>0:                     # have we got any?
-#            process_participant(data,meta,fem,codebook)           # yes: process them
-#     
-#        currentid = record['participationid']     # new participant
-#        data = [record]                      # start the list
-#    else:
-#        data.append(record)                    # add the record onto the list
-#
-#
-#  
-# data=clean_participant(data) # process the last participant
+
 
 ibd = iter(big_data)  # create iterable
 for data in return_data(ibd):
