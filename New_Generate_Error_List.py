@@ -49,6 +49,182 @@ def unpack_choices(m_ent):
     return result
 
 
+_checkbox_ = re.compile(r'(\S+)\(([a-z0-9-]+)\)|(\S+?)(\_{3,4}[a-z0-9-]+$)')
+
+
+def return_redcap_var(var, entry, dictionary):
+    """
+    Expects to be passed the variable name, the entry from the database
+    that has corresponds to the event for this participant containing
+    the variable and then the dictionary for the project
+    """
+    if var not in dictionary:
+        """ need to process checkbox variables that can come in in
+        either varaibale(opt) or variable__option form"""
+        match = _checkbox_.search(var)
+        if match.group(1) in dictionary:  # bracket form
+            m_ent = dictionary[match.group(1)]
+            var_key = (match.group(1) + '___'
+                       + match.group(2)[0:1].replace('-', '_')
+                       + match.group(2)[2:]).lower()
+            choice = match.group(2)
+        elif match.group(3) in dictionary:  # __form
+            m_ent = dictionary[match.group(3)]
+            var_key = var
+            choice = match.group(4).replace('____', '-___')
+        else:
+            print('can\'t resolve call to return_redcap_var with'
+                  'variable {}'.format(var), file=sys.stderr)
+            return ()  # return an empty tuple
+        result = (entry[var_key], )  # '0' or '1'
+        if result[0] == '1':
+            choices = unpack_choices(m_ent['select_choices_or_calculations'])
+            result = result + (choices[choice],)
+        return result  # a tuple with the '0'|'1' and the text desc
+
+    result = ()             # empty tuple
+    var_type = dictionary[var]['field_type']
+    m_ent = dictionary[var]  # meta entry
+
+    result_str = ''         # accumulate result
+
+    # checkbox fields.  Will return a tuple(bitmap of options,
+    # concatenated string of the texts of set options)
+    # if the field is blank will return a tuple of (0,'')
+    # but this should never happen if called correctly
+    if var_type == 'checkbox':
+        # code shared with dropdown and radio
+        choices = unpack_choices(m_ent['select_choices_or_calculations'])
+        result_code = []
+        i = 0
+        for key, desc in choices.items():
+            i += 1
+            var_key = var + '___' + key
+            var_key = var_key.replace('-', '_')  # deal with any hyphens
+            var_key = var_key.lower()
+
+            result_code.append(entry[var_key])
+            if entry[var_key] == '1':              # is option ticked?
+                if len(result_str) > 0:
+                    result_str = result_str + '|'
+                result_str = result_str + desc
+
+        result = (''.join(result_code), result_str)
+        return result
+
+    # dropdown or radio.  returns tuple (value in variable,text designated by that option)
+    # if field is empty ('') will return an empty tuple
+    elif var_type == 'dropdown' or var_type == 'radio':
+        if entry[var] != '':      # ignore blank
+            choices = unpack_choices(m_ent['select_choices_or_calculations'])
+            result_str = choices[entry[var]]
+            result = result + (entry[var], result_str)
+        return result
+
+    # yesno.  returns tuple ('0','No')|('1','Yes') if not blank.  returns empty tuple if blank
+    elif var_type == 'yesno':
+        if entry[var] != '':
+            result = result + (entry[var],)
+            if result[0] == '1':
+                result = result + ('Yes',)
+            else:
+                result = result + ('No',)
+        return result
+
+    # truefalse.  returns tuple ('0','False')|('1','True') if not blank.  returns empty tuple if blank
+    elif var_type == 'truefalse':
+        if entry[var] != '':
+            result = result + (entry[var],)
+            if result[0] == '1':
+                result = result + ('True',)
+            else:
+                result = result + ('False',)
+
+        return result
+
+    # calc or notes fields.  Return tuple with just a single entry, value in the fields.
+    # blanks may be valid values for these fields
+    elif var_type == 'calc' or var_type == 'notes':
+        result = result + (entry[var],)
+        return result
+
+    # has to be a text field
+    else:
+
+        result = result + (entry[var],)
+        # now we need to create the second parameter based on the field validation type
+
+        text_type = m_ent['text_validation_type_or_show_slider_number']
+
+        if text_type == '' or entry[var] == '':
+            """
+            no validation so it's free form text.  Return as single entry
+            tuple
+            """
+            return result + (entry[var],)
+
+        elif text_type == 'integer':          # integer, return integer value
+            result = (entry[var], int(entry[var]))
+            """ return raw value and the integer equivalent"""
+            return result
+
+        elif text_type == 'number':       # float
+            result = (entry[var], float(entry[var]))
+            """ return raw value and the floating point equivalent"""
+            return result
+
+        elif text_type == 'time':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%H:%M').time())
+            return result  # return text and time object
+
+        elif text_type == 'date_dmy':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d').date())
+            return result  # return text string and date object
+
+        elif text_type == 'date_mdy':  # American date
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d').date())
+            return result  # return text string and date object
+
+        elif text_type == 'date_ymd':  # American date
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d').date())
+            return result  # return text string and date object
+
+        elif text_type == 'datetime_dmy':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M'))
+            return result  # return text string and datetime object
+
+        elif text_type == 'datetime_mdy':  # American date
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M'))
+            return result  # return text string and datetime object
+
+        elif text_type == 'datetime_dmy':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M'))
+            return result  # return text string and datetime object
+        elif text_type == 'datetime_seconds_dmy':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
+            return result  # return text string and datetime object
+
+        elif text_type == 'datetime_seconds_mdy':  # American date
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
+            return result  # return text string and datetime object
+
+        elif text_type == 'datetime_seconds_ymd':
+            result = (entry[var], datetime.datetime.
+                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
+            return result  # return text string and datetime object
+
+    return  # should never get here.  Return None = error
+
+
 def process_fields(var, entry, dictionary):
     result = ()             # empty tuple
 
@@ -292,8 +468,8 @@ def tokenise(s):
         else:
             print('Parsing error: expected a token '
                   'but found {} at position {}'.format(match.group('errs'),
-                                                       match.span(),
-                                                       file=sys.stderr))
+                                                       match.span()),
+                  file=sys.stderr)
             yield Token.ERR, match.group('errs')
 
 
@@ -715,7 +891,7 @@ def process_participant(data, dictionary, fem):
                         elif entry['redcap_repeat_instrument'] != '':
                             continue
 
-                        field_value = process_fields(var, entry, meta)
+                        field_value = process_fields(var, entry, dictionary)
                         if field_value is None:
                             sys.exit('Parser failure')
 
