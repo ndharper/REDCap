@@ -18,7 +18,7 @@ import datetime
 # import json
 import itertools
 import argparse
-# from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook, load_workbook
 # from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
 # from openpyxl.worksheet.pagebreak import Break
 from copy import copy
@@ -58,6 +58,7 @@ def return_redcap_var(var, entry, dictionary):
     that has corresponds to the event for this participant containing
     the variable and then the dictionary for the project
     """
+
     if var not in dictionary:
         """ need to process checkbox variables that can come in in
         either varaibale(opt) or variable__option form"""
@@ -77,9 +78,8 @@ def return_redcap_var(var, entry, dictionary):
                   'variable {}'.format(var), file=sys.stderr)
             return ()  # return an empty tuple
         result = (entry[var_key], )  # '0' or '1'
-        if result[0] == '1':
-            choices = unpack_choices(m_ent['select_choices_or_calculations'])
-            result = result + (choices[choice],)
+        choices = unpack_choices(m_ent['select_choices_or_calculations'])
+        result = result + (choices[choice],)
         return result  # a tuple with the '0'|'1' and the text desc
 
     result = ()             # empty tuple
@@ -178,46 +178,21 @@ def return_redcap_var(var, entry, dictionary):
                       strptime(entry[var], '%H:%M').time())
             return result  # return text and time object
 
-        elif text_type == 'date_dmy':
+        # dates, times and datetimes.  dates are always stored as
+        # yyyy-mm-dd
+
+        elif text_type in ['date_dmy', 'date_mdy', 'date_ymd']:
             result = (entry[var], datetime.datetime.
                       strptime(entry[var], '%Y-%m-%d').date())
             return result  # return text string and date object
 
-        elif text_type == 'date_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
-
-        elif text_type == 'date_ymd':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
-
-        elif text_type == 'datetime_dmy':
+        elif text_type in ['datetime_dmy', 'datetime_mdy', 'datetime_dmy']:
             result = (entry[var], datetime.datetime.
                       strptime(entry[var], '%Y-%m-%d %H:%M'))
             return result  # return text string and datetime object
 
-        elif text_type == 'datetime_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
-        elif text_type == 'datetime_seconds_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_seconds_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_seconds_ymd':
+        elif text_type in ['datetime_seconds_dmy', 'datetime_seconds_mdy',
+                           'datetime_seconds_ymd']:
             result = (entry[var], datetime.datetime.
                       strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
             return result  # return text string and datetime object
@@ -380,7 +355,7 @@ _token_re = re.compile(r"""
                         # Allow for optional event and instance
 |(?P<Rvar>((\[.*?\])(?:\s*)){1,3})                 # from 1 to 3 [xxx]
                     # Operators
-|(?P<ops>not            # unitary not function
+|(?P<ops>not            # unitary not function.  use !
 |and                    # logical and
 |or                     # logical or
 |!=                     # logical not equal
@@ -391,13 +366,18 @@ _token_re = re.compile(r"""
 |=<                     # logical less than or equal
 |>                      # logical greater than
 |<                      # logical less than
+|=                      # logical equal to
+|!                      # unary logical not
+|\*\*                   # raise to power
 |\+                     # arithmetic or unary add
 |\-                     # arithmetic or unary minus
 |\*                     # arithmetic multiply
 |/                      # arithmetic divide
-|\^)                    # raise to power
+|\|\|                   # logical or
+|&&)                    # logical and
+
                     # Functions
-|(?P<funcs>datediff     # datediff - 5 parameters
+|((?P<funcs>datediff     # datediff - 5 parameters
 |sum                    # sum - followed by list
 |abs                    # absolute value
 |min                    # minimum - argument is list
@@ -411,11 +391,12 @@ _token_re = re.compile(r"""
 |round                  # round
 |if                     # if(cond,exp_true,exp_false)
 |in)                    # isin - followed by list
+\s*\()                  # eat the opening bracket after function
                     # seperators group
-|(?P<seps>\,            # separator func or list memb
+|(?P<seps>\,            # comma: separator func or list memb
 |\(                     # open bracket
 |\))                    # close bracket
-                    # anything else - error
+                        # anything else - error
 |(?P<errs>\S[a-zA-Z0-9_\.]*)
                       """, re.VERBOSE)
 
@@ -473,76 +454,73 @@ def tokenise(s):
             yield Token.ERR, match.group('errs')
 
 
-# parse the branching logic
+# def parse_branch(var, meta, my_event, big_data):
+#     rvar_pat = re.compile(r'\[(.*?)\]')
+#     str_pat = re.compile(r'\'(.*?)\'')
+#     paren_pat = re.compile(r'\((.*?)\)')
+#     operators = {
+#         '=': '=',
+#         '>=': '>=',
+#         '>': '>',
+#         '<': '<',
+#         '=>': '>=',
+#         '<=': '<=',
+#         '=<': '<=',
+#         '!=': '!=',
+#         '<>': '!=',
+#         'and': 'and',
+#         'or': 'or',
+#         ')': ')',
+#         '(': '('}
 
+#     out_list = []
+#     for entry in meta:
+#         if entry['field_name'] == var:
+#             break
 
-def parse_branch(var, meta, my_event, big_data):
-    rvar_pat = re.compile(r'\[(.*?)\]')
-    str_pat = re.compile(r'\'(.*?)\'')
-    paren_pat = re.compile(r'\((.*?)\)')
-    operators = {
-        '=': '=',
-        '>=': '>=',
-        '>': '>',
-        '<': '<',
-        '=>': '>=',
-        '<=': '<=',
-        '=<': '<=',
-        '!=': '!=',
-        '<>': '!=',
-        'and': 'and',
-        'or': 'or',
-        ')': ')',
-        '(': '('}
+#     if entry['field_name'] != var:
+#         # this will happen if the var isn't in the meta data list - error
+#         return
 
-    out_list = []
-    for entry in meta:
-        if entry['field_name'] == var:
-            break
+#     if entry['branching_logic'] == '':
+#         return  # we've found it but it doesn't have any branching logic
 
-    if entry['field_name'] != var:
-        # this will happen if the var isn't in the meta data list - error
-        return
+#     # now we should have alist of individual terms
+#     terms = entry['branching_logic'].split()
+# #
+#     for term in terms:
+#         # looking for redcap variable
+#         matches = rvar_pat.findall(term)
+#         # we've only got a single term so it must be in current entry
+#         if len(matches) == 1:
+#             # subsitute baby(1) = baby___1
+#             a = paren_pat.sub('___\g<1>', matches[0])
 
-    if entry['branching_logic'] == '':
-        return                          # we've found it but it doesn't have any branching logic
+#             out_list.append(my_event[a.lower()])
 
-    # now we should have alist of individual terms
-    terms = entry['branching_logic'].split()
-#
-    for term in terms:
-        # looking for redcap variable
-        matches = rvar_pat.findall(term)
-        # we've only got a single term so it must be in current entry
-        if len(matches) == 1:
-            # subsitute baby(1) = baby___1
-            a = paren_pat.sub('___\g<1>', matches[0])
+#         # if there are two [xxx][yyy] then we have both an event and a variable
+#         elif len(matches) == 2:
+#             for entry2 in big_data:  # search through all of big data
+#                 if matches[0] == entry2['redcap_event_name']:
+#                     # subsitute baby(1) = baby___1
+#                     a = paren_pat.sub('___\g<1>', matches[1])
+#                     out_list.append(entry2[a.lower()])
+#                     break
+#         else:
+#             # not a redcap variable.  Look for string argument wrapped in quotes
 
-            out_list.append(my_event[a.lower()])
+#             matches = str_pat.findall(term)  # should find either 0 or 1
+#             if len(matches) > 0:
+#                 out_list.append(matches[0])  # will strip the wrapping quotes
 
-        # if there are two [xxx][yyy] then we have both an event and a variable
-        elif len(matches) == 2:
-            for entry2 in big_data:  # search through all of big data
-                if matches[0] == entry2['redcap_event_name']:
-                    # subsitute baby(1) = baby___1
-                    a = paren_pat.sub('___\g<1>', matches[1])
-                    out_list.append(entry2[a.lower()])
-                    break
-        else:
-            # not a redcap variable.  Look for string argument wrapped in quotes
+#         # search for operators or paren
+#             elif term.strip() in operators:
+#                 out_list.append('%$*&' + term.strip())
 
-            matches = str_pat.findall(term)  # should find either 0 or 1
-            if len(matches) > 0:
-                out_list.append(matches[0])  # will strip the wrapping quotes
+#             else:
+#                 out_list.append(term)
 
-        # search for operators or paren
-            elif term.strip() in operators:
-                out_list.append('%$*&' + term.strip())
-
-            else:
-                out_list.append(term)
-
-    return out_list     # should tokenise
+#     return out_list     # should tokenise
 
 
 def getPrec(node):
@@ -589,6 +567,90 @@ def climbTree(node, prec):
 
 
 # build parse tree from expression.
+
+operators2 = {
+    'or': (2, '||'),       # logical or
+    '||': (2, '||'),       # logical or
+    '&&': (4, '&&'),       # logical and
+    'and': (4, '&&'),      # logical and - Alias
+    '=': (6, '='),         # logical is equal to
+    '!=': (6, '!='),       # logical is not equal to
+    '<>': (6, '!='),       # logical is not equal to - Alias
+    '>': (6, '>'),         # logical greater than
+    '>=': (6, '>='),       # logical greater or equal to
+    '=>': (6, '>='),       # logical greater or equal to - Alias
+    '<': (6, '<'),         # logical less than
+    '<=': (6, '<='),       # logical less than or equal to
+    '=<': (6, '<='),       # logical less than or equal to - Alias
+    '+': (8, '+'),         # arithmatic addition
+    '-': (8, '-'),         # arithmatic subtraction
+    '*': (10, '*'),        # arithmatic multiplication
+    '/': (10, '/'),        # arithmatic division
+    '**': (11, '**'),      # arithmatic exponiation
+    '!': (12, '!'),        # logical not
+    'not': (12, '!'),      # logical not - Alias
+    # unary operators won't be found in input stream but parser will replace
+    # binary + or 1 with them where they are found after an opning '(', after
+    # another operator or at start of line
+    'n': (12, 'n'),        # unary negative
+    'p': (12, 'p')          # unary positive - does nothing
+}
+
+
+def parseExpression(s):
+    """
+    parse the conditional or calculation string by tokenising and
+    building a binary tree.  The tree operations are in the module
+    BinaryTree
+    Returns the tree or None if error
+    """
+    stack = Stack()
+    TreeRoot = BinaryTree('(')  # start tree with dummy "("
+    CurrentNode = TreeRoot
+    prev_term = None  # will use to distinguish unary and binary + or -
+    for term in tokenise(s):
+        if term[0] == Token.CONST or term[0] == Token.RCAP_VAR:
+            new_node = BinaryTree(term, 999)
+            CurrentNode = CurrentNode.addToTree(new_node)
+        elif term[0] == Token.FUNCT:
+            new_node = BinaryTree(term, 100)
+            CurrentNode = CurrentNode.addToTree(new_node)
+            CurrentNode.precedence = 0
+            stack.push(CurrentNode)
+        elif term[0] == Token.OPER:
+            if term[1] in '+, -':  # these can be unary or binary
+                # will be unary if 1st on a line or 1st after OPER (
+                if (not prev_term) or (prev_term[0] == Token.OPER) or\
+                        (prev_term[0] == Token.SEP and prev_term[1] == '('):
+                    if term[1] == '-':
+                        term = (Token.OPER, 'n')  # use the unary
+                    elif term[1] == '+':
+                        term = (Token.OPER, 'p')  # use the unary
+            # replace alias and add precedence
+            op_term = (term[0], operators2[term[1]][1])
+            prec = operators2[term[1]][0]
+            new_node = BinaryTree(op_term, prec)
+            CurrentNode = CurrentNode.addToTree(new_node)
+        elif term[0] == Token.SEP:
+            if term[1] == '(':
+                new_node = BinaryTree('(')  # 0 precedence
+                CurrentNode = CurrentNode.insertBelowCross(new_node)
+                stack.push(CurrentNode)
+            elif term[1] == ',':
+                CurrentNode = stack.peek()
+                CurrentNode = CurrentNode.appendFunc()
+            elif term[1] == ')':
+                CurrentNode = stack.pop()
+                if CurrentNode.getValue()[0] == Token.FUNCT:
+                    CurrentNode.precedence = 100
+                    CurrentNode = CurrentNode.appendFunc()
+                else:
+                    CurrentNode = CurrentNode.deleteNode()
+        elif term[0] == Token.ERR:
+            return  # should already have produced error
+        prev_term = term  # so we can check for unary ops after op
+    return TreeRoot.deleteNode()  # snip the initial fake '('
+
 
 def buildParseTree(fplist):
     operators = {
@@ -642,13 +704,79 @@ def buildParseTree(fplist):
     CurrentNode = TreeRoot.deleteNode()  # snip off initial orphan ()
     return CurrentNode
 
+
+def decodeRedcapVar(var):
+    if type(var) != tuple:
+        print('decodeRedcapVar called with invalid arguement',
+              var, file=sys.stderr)
+        return
+    # need to find how many arguments we have
+    if len(var) < 1:
+        print('decodeRedcapVar called with invalid arguement',
+              var, file=sys.stderr)
+        return
+    #  SELF as a variables means the variable we are testing.  included to allow
+    # test logic to be used for more than one variable
+    if [var0] == 'SELF':
+        return field_value
+    if len(var) == 1:  # if we only have one term, must be the variable
+        return return_redcap_var(var[0], entry, dictionary)
+
+    # we have a specification with an event and maybe an instance
+    event = entry[0]
+    variable = entry[1]
+    if len(var) >= 3:
+        repeat_instance = entry[2]
+    else:
+        repeat_instance = ''
+
+    for e in data:
+        if event == e['redcap_event_name']:
+            if repeat_instance == e['redcap_repeat_instance']:
+                return return_redcap_var(variable, e, dictionary)
+
+    return  # will return None if we get here meaning variable not found
+
+
+# new evaluate parse tree
+
+def evaluateTree(parse_tree):
+    if not isinstance(parse_tree, BinaryTree):
+        return  # return non.  Error causeing should have been printed already
+
+    node_value = parse_tree.getValue()  # should get a token.
+    if node_value[0] == Token.CONST:   # constant?
+        if not parse_tree.isLeaf():
+            print('evaluteTree found a constant node with branches',
+                  file=sus.stderr)
+        return node_value[1]  # return the value
+    elif node_value[0] == Token.RCAP_VAR:
+        return decodeRedcap_var(node_value[1])  # will return a tuple
+    elif node_value[0] == Token.OPER:
+        operator = node_value[1]
+        op = operators[operator]          # get the opperator routine
+        left = left_arg(parse_tree)     # might be None
+        right = right_arg(parse_tree)
+        val = eval(op + '(left,right)')
+        return val
+    elif node_value[0] == Token.FUNCT:
+        function = node_value[1]
+        func = functions[function]
+        f_args = []
+        for left_node in parse_tree.getLeftChild:
+            f_arg = evaluateTree(left_node)
+            f_args = fargs + [fa_arg]
+        val = eval(func + 'f_args)')
+        return val
+
+
 # evaluate parse tree.
 
 
 def evalParseTree(parse_tree):
     operators = {
-        'and': 'logicAnd',
-        'or': 'logicOr',
+        '&&': 'logicAnd',
+        '||': 'logicOr',
         '=': 'logicEq',
         '!=': 'logicNE',
         '>': 'logicGT',
@@ -659,7 +787,10 @@ def evalParseTree(parse_tree):
         '/': 'arithDiv',
         '+': 'arithAdd',
         '-': 'arithSub',
-        '^': 'arithExp'
+        '^': 'arithExp',
+        'n': 'unary_negative'
+        'p': 'unary_positive'
+
     }
 
     if not isinstance(parse_tree, BinaryTree):
@@ -796,7 +927,7 @@ def arithExp(left, right):
 def left_arg(parse_tree):
     left = parse_tree.getLeftChild()
     if not left.isLeaf():                   # if it's not a leaf then call evalParseTree recursively
-        return evalParseTree(left)
+        return evaluateTree(left)
 
     return left.getValue()                  # if it's a leaf then just reurn it's value
 
@@ -804,7 +935,7 @@ def left_arg(parse_tree):
 def right_arg(parse_tree):
     right = parse_tree.getRightChild()
     if not right.isLeaf():                   # if it's not a leaf then call evalParseTree recursively
-        return evalParseTree(right)
+        return evaluateTree(right)
 
     return right.getValue()
 
@@ -824,7 +955,8 @@ def clean_participant(data_acc):
     scans = 0
     data = []
     for r in data_acc:
-        if r['redcap_event_name'] in ['neonatal_scan_arm_1', 'fetal_scan_arm_1']:
+        if r['redcap_event_name'] in ['neonatal_scan_arm_1',
+                                      'fetal_scan_arm_1']:
             if r['scan_disabled'] == '1' or r['scan_pilot'] == '1':
                 continue
             else:
@@ -838,7 +970,7 @@ def clean_participant(data_acc):
     else:
         return data
 
- # build the metadata dictionary so we can find our variables easily
+# build the metadata dictionary so we can find our variables easily
 # meta_dict={}
 # i=0
 # for var in meta:

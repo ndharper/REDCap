@@ -15,12 +15,13 @@ class BinaryTree:
     but added link to parent node and added functions for parse tree operation
     """
 
-    def __init__(self, nodeValue):
+    def __init__(self, nodeValue, prec=0):
         """
         brand new free standing node
         has whatever value was passed, no parent, no children
         """
         self.value = nodeValue
+        self.precedence = prec
         self.parent = None
         self.left = None
         self.right = None
@@ -29,6 +30,9 @@ class BinaryTree:
 
     def getValue(self):
         return self.value
+
+    def getPrecedence(self):
+        return self.precedence
 
     def getParent(self):
         return self.parent
@@ -190,6 +194,36 @@ class BinaryTree:
 
         return n                    # return the new node
 
+    def addToTree(self, new_node):
+        """
+        climb tree until we've found the place to insert a new node
+        arguments are the current node and the precedence of the new item.
+        If new item precedence is even then we will stop when we find
+        a node with a precedence that is less than or equal to the precedence
+        of the new item. These are left associative operators.
+        If the new item precedemce is even then we will climb until we find
+        a node that is strictly less than new item.  This places right
+        associative operators, e.g. exponentiation, in the right place
+        """
+
+        current_node = self
+        cur_prec = current_node.getPrecedence()
+        new_prec = new_node.getPrecedence()
+        # now have to see if it's left or right associative
+        if new_prec % 2:               # precedence even or odd?
+            while cur_prec > new_prec:  # odd.  left associative.  Find node <=
+                current_node = current_node.upTree()    # move up
+                cur_prec = current_node.getPrecedence()
+
+        else:
+            while cur_prec >= new_prec:  # odd. left associative.  Find node <=
+                current_node = current_node.upTree()    # move up
+                cur_prec = current_node.getPrecedence()
+
+        current_node = current_node.insertBelowCross(new_node)
+
+        return current_node
+
     def deleteNode(self):
         """
         Delete's the current node from the tree and connects its parent
@@ -206,6 +240,25 @@ class BinaryTree:
             node = self.right   # return right child
             node.parent = None  # clear upstrean pointer
         return node
+
+    def appendFunc(self):
+        """
+        Need for functions with multiple parameters.  Single parameter
+        functions have everything hanging off the rught side.  When we
+        parse the comma, we need to stash the existing branch and build
+        the next one.  This function will stash on the left as a tuple
+        of downstream nodes. The top node of each branch will have the
+        function node as it's parent.
+        """
+        left_branch = self.left  # existing left side
+        if type(left_branch) == tuple:  # have we got one
+            # yes: build new tuple form old + new
+            left_branch = left_branch + (self.right,)
+        else:  # no: create tuple to hold branch
+            left_branch = (self.right, )
+        self.left = left_branch
+        self.right = None
+        return self
 
     def print_tree(self):
         """
