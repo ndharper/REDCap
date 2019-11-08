@@ -9,18 +9,11 @@ Created on Tue Apr  2 10:12:03 2019
 from redcap import Project, RedcapError
 from enum import Enum
 import re
-# from requests import post
-# from pathlib import Path
-# import smtplib
+
 import datetime
-# import pycurl
-# import certifi
-# import json
 import itertools
 import argparse
 from openpyxl import Workbook, load_workbook
-# from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
-# from openpyxl.worksheet.pagebreak import Break
 from copy import copy
 import csv
 from pythonds.basic import Stack
@@ -30,38 +23,61 @@ import urllib3
 import sys
 import os
 urllib3.disable_warnings()
-# import subprocess
-# import glob
-# import io
 
 
-def unpack_choices(m_ent):
-    """ return dictionary of value: choice """
-    result = {}
+class REDCap_variable:
+    """
+    object to contain a redcap variable.  Has three attriibutes:
+        literal is whatever is actually stored in REDCap.  Will always
+           be string even if empty.  If field is a checkbox and the field
+           is accessed using the unqualified variable name then lieteral
+           will be a text string of '0's or '1's comprising a bitmap of
+           all options.  It's little endian so 1st option is leftmost
+        value is the content cast into a numeric, boolean or datetime
+           object based on the validation rule.
+        label is the string representing the contents and will normally
+            only be set for checkbox, radio and dropdown
+    """
 
-    choices = m_ent.split('|')      # break into list of choices
-    for choice in choices:
-        choice2 = choice.split(',', 1)   # now split the key from the value
-        key = choice2[0].strip()      # clean off the blanks
-        val = choice2[1].strip()
-        result[key] = val
+    def __init__(self, lit, value=None, label=None):
+        self.literal = lit
+        if value:
+            self.value = value
+        else:
+            self.value = lit
+        self.label = label
 
-    return result
-
-
-_checkbox_ = re.compile(r'(\S+)\(([a-z0-9-]+)\)|(\S+?)(\_{3,4}[a-z0-9-]+$)')
+    def __str__(self):
+        return 'literal: {}; value type: {};\
+                value: {}; label: {}'.format(self.literal, type(self.value),
+                                             self.value, self.label)
 
 
 def return_redcap_var(var, entry, dictionary):
     """
+    Returns a REDCap_variable object corresponding to the variables data
     Expects to be passed the variable name, the entry from the database
     that has corresponds to the event for this participant containing
     the variable and then the dictionary for the project
     """
+    def unpack_choices(m_ent):
+        """
+        for checkbox, radio and dropdown fields return a list of choices
+        """
+        result = {}
+        choices = m_ent.split('|')      # break into list of choices
+        for choice in choices:
+            choice2 = choice.split(',', 1)  # now split the key from the value
+            key = choice2[0].strip()      # clean off the blanks
+            val = choice2[1].strip()
+            result[key] = val
 
-    if var not in dictionary:
+        return result
+
+    if var not in dictionary:  # should only happen for checkbox
         """ need to process checkbox variables that can come in in
         either varaibale(opt) or variable__option form"""
+        # _checkbox_ is global.  Got decalered and compiled in __main__
         match = _checkbox_.search(var)
         if match.group(1) in dictionary:  # bracket form
             m_ent = dictionary[match.group(1)]
@@ -76,26 +92,21 @@ def return_redcap_var(var, entry, dictionary):
         else:
             print('can\'t resolve call to return_redcap_var with'
                   'variable {}'.format(var), file=sys.stderr)
-            return ()  # return an empty tuple
+            return None  # signal failure with None return
         result = (entry[var_key], )  # '0' or '1'
         choices = unpack_choices(m_ent['select_choices_or_calculations'])
-        result = result + (choices[choice],)
-        return result  # a tuple with the '0'|'1' and the text desc
-
-    result = ()             # empty tuple
+        return REDCap_variable(lit=entry[var_key], label=choices[choice])
     var_type = dictionary[var]['field_type']
     m_ent = dictionary[var]  # meta entry
 
     result_str = ''         # accumulate result
 
-    # checkbox fields.  Will return a tuple(bitmap of options,
+    # checkbox fields.  Will return a bitmap of options,
     # concatenated string of the texts of set options)
-    # if the field is blank will return a tuple of (0,'')
-    # but this should never happen if called correctly
     if var_type == 'checkbox':
         # code shared with dropdown and radio
         choices = unpack_choices(m_ent['select_choices_or_calculations'])
-        result_code = []
+        result_code = []  # build bitmap
         i = 0
         for key, desc in choices.items():
             i += 1
@@ -109,50 +120,46 @@ def return_redcap_var(var, entry, dictionary):
                     result_str = result_str + '|'
                 result_str = result_str + desc
 
-        result = (''.join(result_code), result_str)
-        return result
+        return REDCap_variable(lit=''.join(result_code), label=result_str)
 
-    # dropdown or radio.  returns tuple (value in variable,text designated by that option)
-    # if field is empty ('') will return an empty tuple
+    # dropdown or radio.  returns tuple (value in variable,text
+    # designated by that option).  If field is empty ('') will
+    # return an empty tuple
     elif var_type == 'dropdown' or var_type == 'radio':
         if entry[var] != '':      # ignore blank
             choices = unpack_choices(m_ent['select_choices_or_calculations'])
-            result_str = choices[entry[var]]
-            result = result + (entry[var], result_str)
-        return result
+            return REDCap_variable(entry[var], label=choices[entry[var]])
+        else:
+            return REDCap_variable(entry[var], label='')  # empty
 
-    # yesno.  returns tuple ('0','No')|('1','Yes') if not blank.  returns empty tuple if blank
+    # yesno
     elif var_type == 'yesno':
-        if entry[var] != '':
-            result = result + (entry[var],)
-            if result[0] == '1':
-                result = result + ('Yes',)
-            else:
-                result = result + ('No',)
-        return result
+        if entry[var] == '':
+            return REDCap_variable(entry[var], label='')
+        elif entry[var] == '1':
+            return REDCap_variable(entry[var], label='Yes')
+        else:
+            return REDCap_variable(entry[var], label='No')
 
-    # truefalse.  returns tuple ('0','False')|('1','True') if not blank.  returns empty tuple if blank
+    # truefalse
     elif var_type == 'truefalse':
-        if entry[var] != '':
-            result = result + (entry[var],)
-            if result[0] == '1':
-                result = result + ('True',)
-            else:
-                result = result + ('False',)
+        if entry[var] == '':
+            return REDCap_variable(entry[var], label='')
+        elif entry[var] == '1':
+            return REDCap_variable(entry[var], value=True, label='True')
+        elif entry[var] == '0':
+            return REDCap_variable(entry[var], value=False, label='False')
 
-        return result
-
-    # calc or notes fields.  Return tuple with just a single entry, value in the fields.
-    # blanks may be valid values for these fields
+    # calc or notes fields.  Return tuple with just a single
+    # entry, value in the fields. Blanks may be valid values for these fields
     elif var_type == 'calc' or var_type == 'notes':
-        result = result + (entry[var],)
-        return result
+        return REDCap_variable([entry[var]])
 
-    # has to be a text field
+    # has to be a text field.  Return the value and the text_type so
+    # we can decode it later
     else:
-
-        result = result + (entry[var],)
-        # now we need to create the second parameter based on the field validation type
+        # now we need to create the second parameter based on the
+        # field validation type
 
         text_type = m_ent['text_validation_type_or_show_slider_number']
 
@@ -161,187 +168,72 @@ def return_redcap_var(var, entry, dictionary):
             no validation so it's free form text.  Return as single entry
             tuple
             """
-            return result + (entry[var],)
+            return REDCap_variable(entry[var])
 
         elif text_type == 'integer':          # integer, return integer value
-            result = (entry[var], int(entry[var]))
-            """ return raw value and the integer equivalent"""
-            return result
+            return REDCap_variable(entry[var], value=int(entry[var]))
 
         elif text_type == 'number':       # float
-            result = (entry[var], float(entry[var]))
-            """ return raw value and the floating point equivalent"""
-            return result
+            return REDCap_variable(entry[var], value=float(entry[var]))
 
         elif text_type == 'time':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%H:%M').time())
-            return result  # return text and time object
-
-        # dates, times and datetimes.  dates are always stored as
-        # yyyy-mm-dd
+            return REDCap_variable(entry[var], value=datetime.datetime.
+                                   strptime(entry[var], '%H:%M').time())
 
         elif text_type in ['date_dmy', 'date_mdy', 'date_ymd']:
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
+            return REDCap_variable(entry[var], datetime.datetime.
+                                   strptime(entry[var], '%Y-%m-%d').date())
 
-        elif text_type in ['datetime_dmy', 'datetime_mdy', 'datetime_dmy']:
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
+        elif text_type in ['datetime_mdy', 'datetime_dmy', 'datetime_ymd']:
+            return REDCap_variable(entry[var], datetime.datetime.
+                                   strptime(entry[var], '%Y-%m-%d %H:%M'))
 
-        elif text_type in ['datetime_seconds_dmy', 'datetime_seconds_mdy',
+        elif text_type in ['datetime_seconds_mdy', 'datetime_seconds_dmy',
                            'datetime_seconds_ymd']:
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
+            return REDCap_variable(entry[var], datetime.datetime.
+                                   strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
 
     return  # should never get here.  Return None = error
 
 
-def process_fields(var, entry, dictionary):
-    result = ()             # empty tuple
+def decodeRedcapVar(v, entry, dictionary):
+    """
+    return a REDCap_variable object corresponding to a redcap variable
+    specified in branching or test logic
+    THIS CODE WILL NEED TO BE UPDATED TO SUPPORT SMART VARIABLES
 
-    var_type = dictionary[var]['field_type']
-    m_ent = dictionary[var]
-    result_str = ''         # accumulate result
+    """
+    if type(v) != tuple:
+        print('decodeRedcapVar called with invalid arguement',
+              v, file=sys.stderr)
+        return
+    # need to find how many arguments we have
+    if len(v) < 1:
+        print('decodeRedcapVar called with invalid arguement',
+              v, file=sys.stderr)
+        return
+    # SELF as a variables means the variable we are testing.
+    # included to allow test logic to be used for more than
+    # one variable
+    if v[0] == 'SELF':
+        return return_redcap_var(Current_Variable)
+    if len(v) == 1:  # if we only have one term, must be the variable
+        return return_redcap_var(v[0], entry, dictionary)
 
-    # checkbox fields.  Will return a tuple(bitmap of options,
-    # concatenated string of the texts of set options)
-    # if the field is blank will return a tuple of (0,'')
-    # but this should never happen if called correctly
-    if var_type == 'checkbox':
-        # code shared with dropdown and radio
-        choices = unpack_choices(m_ent['select_choices_or_calculations'])
-        result_code = 0
-        i = 0
-        for key, desc in choices.items():
-            i += 1
-            var_key = var + '___' + key
-            var_key = var_key.replace('-', '_')  # deal with any hyphens
-            var_key = var_key.lower()
-
-            if entry[var_key] == '1':              # is option ticked?
-                result_code = result_code * 2 + 1    # generate bitmap
-                if len(result_str) > 0:
-                    result_str = result_str + '|'
-                result_str = result_str + desc
-
-        result = result + (result_code, result_str)
-        return result
-
-    # dropdown or radio.  returns tuple (value in variable,text designated by that option)
-    # if field is empty ('') will return an empty tuple
-    elif var_type == 'dropdown' or var_type == 'radio':
-        if entry[var] != '':      # ignore blank
-            choices = unpack_choices(m_ent['select_choices_or_calculations'])
-            result_str = choices[entry[var]]
-            result = result + (entry[var], result_str)
-        return result
-
-    # yesno.  returns tuple ('0','No')|('1','Yes') if not blank.  returns empty tuple if blank
-    elif var_type == 'yesno':
-        if entry[var] != '':
-            result = result + (entry[var],)
-            if result[0] == '1':
-                result = result + ('Yes',)
-            else:
-                result = result + ('No',)
-        return result
-
-    # truefalse.  returns tuple ('0','False')|('1','True') if not blank.  returns empty tuple if blank
-    elif var_type == 'truefalse':
-        if entry[var] != '':
-            result = result + (entry[var],)
-            if result[0] == '1':
-                result = result + ('True',)
-            else:
-                result = result + ('False',)
-
-        return result
-
-    # calc or notes fields.  Return tuple with just a single entry, value in the fields.
-    # blanks may be valid values for these fields
-    elif var_type == 'calc' or var_type == 'notes':
-        result = result + (entry[var],)
-        return result
-
-    # has to be a text field
+    # we have a specification with an event and maybe an instance
+    event = v[0]
+    variable = v[1]
+    if len(v) >= 3:
+        repeat_instance = v[2]
     else:
+        repeat_instance = ''
 
-        result = result + (entry[var],)
-        # now we need to create the second parameter based on the field validation type
+    for e in data:
+        if event == e['redcap_event_name']:
+            if repeat_instance == e['redcap_repeat_instance']:
+                return return_redcap_var(variable, e, dictionary)
 
-        text_type = m_ent['text_validation_type_or_show_slider_number']
-
-        if text_type == '' or entry[var] == '':
-            """
-            no validation so it's free form text.  Return as single entry
-            tuple
-            """
-            return result + (entry[var],)
-
-        elif text_type == 'integer':          # integer, return integer value
-            result = (entry[var], int(entry[var]))
-            """ return raw value and the integer equivalent"""
-            return result
-
-        elif text_type == 'number':       # float
-            result = (entry[var], float(entry[var]))
-            """ return raw value and the floating point equivalent"""
-            return result
-
-        elif text_type == 'time':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%H:%M').time())
-            return result  # return text and time object
-
-        elif text_type == 'date_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
-
-        elif text_type == 'date_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
-
-        elif text_type == 'date_ymd':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d').date())
-            return result  # return text string and date object
-
-        elif text_type == 'datetime_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M'))
-            return result  # return text string and datetime object
-        elif text_type == 'datetime_seconds_dmy':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_seconds_mdy':  # American date
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
-
-        elif text_type == 'datetime_seconds_ymd':
-            result = (entry[var], datetime.datetime.
-                      strptime(entry[var], '%Y-%m-%d %H:%M:%S'))
-            return result  # return text string and datetime object
-
-    return  # should never get here.  Return None = error
+    return  # will return None if we get here meaning variable not found
 
 
 _token_re = re.compile(r"""
@@ -454,73 +346,73 @@ def tokenise(s):
             yield Token.ERR, match.group('errs')
 
 
-# def parse_branch(var, meta, my_event, big_data):
-#     rvar_pat = re.compile(r'\[(.*?)\]')
-#     str_pat = re.compile(r'\'(.*?)\'')
-#     paren_pat = re.compile(r'\((.*?)\)')
-#     operators = {
-#         '=': '=',
-#         '>=': '>=',
-#         '>': '>',
-#         '<': '<',
-#         '=>': '>=',
-#         '<=': '<=',
-#         '=<': '<=',
-#         '!=': '!=',
-#         '<>': '!=',
-#         'and': 'and',
-#         'or': 'or',
-#         ')': ')',
-#         '(': '('}
+def parse_branch(var, meta, my_event, big_data):
+    rvar_pat = re.compile(r'\[(.*?)\]')
+    str_pat = re.compile(r'\'(.*?)\'')
+    paren_pat = re.compile(r'\((.*?)\)')
+    operators = {
+        '=': '=',
+        '>=': '>=',
+        '>': '>',
+        '<': '<',
+        '=>': '>=',
+        '<=': '<=',
+        '=<': '<=',
+        '!=': '!=',
+        '<>': '!=',
+        'and': 'and',
+        'or': 'or',
+        ')': ')',
+        '(': '('}
 
-#     out_list = []
-#     for entry in meta:
-#         if entry['field_name'] == var:
-#             break
+    out_list = []
+    for entry in meta:
+        if entry['field_name'] == var:
+            break
 
-#     if entry['field_name'] != var:
-#         # this will happen if the var isn't in the meta data list - error
-#         return
+    if entry['field_name'] != var:
+        # this will happen if the var isn't in the meta data list - error
+        return
 
-#     if entry['branching_logic'] == '':
-#         return  # we've found it but it doesn't have any branching logic
+    if entry['branching_logic'] == '':
+        return  # we've found it but it doesn't have any branching logic
 
-#     # now we should have alist of individual terms
-#     terms = entry['branching_logic'].split()
-# #
-#     for term in terms:
-#         # looking for redcap variable
-#         matches = rvar_pat.findall(term)
-#         # we've only got a single term so it must be in current entry
-#         if len(matches) == 1:
-#             # subsitute baby(1) = baby___1
-#             a = paren_pat.sub('___\g<1>', matches[0])
+    # now we should have alist of individual terms
+    terms = entry['branching_logic'].split()
+#
+    for term in terms:
+        # looking for redcap variable
+        matches = rvar_pat.findall(term)
+        # we've only got a single term so it must be in current entry
+        if len(matches) == 1:
+            # subsitute baby(1) = baby___1
+            a = paren_pat.sub('___\g<1>', matches[0])
 
-#             out_list.append(my_event[a.lower()])
+            out_list.append(my_event[a.lower()])
 
-#         # if there are two [xxx][yyy] then we have both an event and a variable
-#         elif len(matches) == 2:
-#             for entry2 in big_data:  # search through all of big data
-#                 if matches[0] == entry2['redcap_event_name']:
-#                     # subsitute baby(1) = baby___1
-#                     a = paren_pat.sub('___\g<1>', matches[1])
-#                     out_list.append(entry2[a.lower()])
-#                     break
-#         else:
-#             # not a redcap variable.  Look for string argument wrapped in quotes
+        # if there are two [xxx][yyy] then we have both an event and a variable
+        elif len(matches) == 2:
+            for entry2 in big_data:  # search through all of big data
+                if matches[0] == entry2['redcap_event_name']:
+                    # subsitute baby(1) = baby___1
+                    a = paren_pat.sub('___\g<1>', matches[1])
+                    out_list.append(entry2[a.lower()])
+                    break
+        else:
+            # not a redcap variable.  Look for string argument wrapped in quotes
 
-#             matches = str_pat.findall(term)  # should find either 0 or 1
-#             if len(matches) > 0:
-#                 out_list.append(matches[0])  # will strip the wrapping quotes
+            matches = str_pat.findall(term)  # should find either 0 or 1
+            if len(matches) > 0:
+                out_list.append(matches[0])  # will strip the wrapping quotes
 
-#         # search for operators or paren
-#             elif term.strip() in operators:
-#                 out_list.append('%$*&' + term.strip())
+        # search for operators or paren
+            elif term.strip() in operators:
+                out_list.append('%$*&' + term.strip())
 
-#             else:
-#                 out_list.append(term)
+            else:
+                out_list.append(term)
 
-#     return out_list     # should tokenise
+    return out_list     # should tokenise
 
 
 def getPrec(node):
@@ -540,33 +432,8 @@ def getPrec(node):
     return cur_prec
 
 
-def climbTree(node, prec):
-    """
-    climb tree until we've found the place to insert a new node
-    arguments are the current node and the precedence of the new item.
-    If new item precedence is even then we will stop when we find a node with
-    a precedence that is less than or equal to the precedence of the new item.
-    These are left associative operators
-    If the new item precedemce is even then we will climb until we find
-    a node that is strictly less than new item.  This places right
-    associative operators, e.g. exponentiation, in the right place
-    """
-    cur_prec = getPrec(node)  # precedence of the current node
-    # now have to see if it's left or right associative
-    if prec % 2:                    # precedence even or odd?
-        while cur_prec > prec:      # odd.  left associative.  Find node <=
-            node = node.upTree()    # move up
-            cur_prec = getPrec(node)
-
-    else:
-        while cur_prec >= prec:     # even.  right associative.  Find node <
-            node = node.upTree()    # move up
-            cur_prec = getPrec(node)
-
-    return node  # will return pointer to node that we want to insert after
-
-
 # build parse tree from expression.
+
 
 operators2 = {
     'or': (2, '||'),       # logical or
@@ -652,130 +519,23 @@ def parseExpression(s):
     return TreeRoot.deleteNode()  # snip the initial fake '('
 
 
-def buildParseTree(fplist):
-    operators = {
-        'and': 2,
-        'or': 2,
-        '=': 6,
-        '!=': 6,
-        '>': 6,
-        '<=': 6,
-        '>': 6,
-        '<=': 6,
-        '*': 10,
-        '/': 10,
-        '+': 8,
-        '-': 8,
-        '^': 11,
-    }
+# try and recast argumet
 
-    stack = Stack()
-    left_bracket = ('(', 0)          # tuple.  0 precedence - lowest
+def recast_arg(arg):
+    if type(arg) in [bool, int, float]:
+        return arg  # we're good
+    if type(arg) == str:  # check and see if we have a date
 
-    # dummy an initial left bracket tuple node
-    TreeRoot = BinaryTree(left_bracket)
-    CurrentNode = TreeRoot
+        # new evaluate parse tree
 
-    for entry in fplist:        # loop through each symbol
-        if type(entry) != str or str(entry)[:4] != '%$*&':  # operand?
-            CurrentNode = CurrentNode.insertBelowCross(entry)
-
-        elif entry == '%$*&(':  # opening bracket?
-            CurrentNode = CurrentNode.insertBelowCross(left_bracket)
-            stack.push(CurrentNode)  # save so we can get back when we find )
-
-        elif entry == '%$*&)':  # closing bracket
-            # pop the opening bracket off the stack and delete it
-            # will be left pointing to the parent of the open bracket
-            CurrentNode = stack.pop()
-            CurrentNode = CurrentNode.deleteNode()
-
-        elif entry[4:] in operators:
-
-            prec = operators[entry[4:]]     # get the precedence
-            CurrentNode = climbTree(CurrentNode, prec)
-            CurrentNode = CurrentNode.insertBelowCross(
-                (entry[4:], operators[entry[4:]]))
-
-        else:
-            err_str = 'entry' + entry + 'cannot be processed in module buildParseTree'
-            sys.exit(err_str)
-
-    CurrentNode = TreeRoot.deleteNode()  # snip off initial orphan ()
-    return CurrentNode
-
-
-def decodeRedcapVar(var):
-    if type(var) != tuple:
-        print('decodeRedcapVar called with invalid arguement',
-              var, file=sys.stderr)
-        return
-    # need to find how many arguments we have
-    if len(var) < 1:
-        print('decodeRedcapVar called with invalid arguement',
-              var, file=sys.stderr)
-        return
-    #  SELF as a variables means the variable we are testing.  included to allow
-    # test logic to be used for more than one variable
-    if [var0] == 'SELF':
-        return field_value
-    if len(var) == 1:  # if we only have one term, must be the variable
-        return return_redcap_var(var[0], entry, dictionary)
-
-    # we have a specification with an event and maybe an instance
-    event = entry[0]
-    variable = entry[1]
-    if len(var) >= 3:
-        repeat_instance = entry[2]
-    else:
-        repeat_instance = ''
-
-    for e in data:
-        if event == e['redcap_event_name']:
-            if repeat_instance == e['redcap_repeat_instance']:
-                return return_redcap_var(variable, e, dictionary)
-
-    return  # will return None if we get here meaning variable not found
-
-
-# new evaluate parse tree
 
 def evaluateTree(parse_tree):
-    if not isinstance(parse_tree, BinaryTree):
-        return  # return non.  Error causeing should have been printed already
-
-    node_value = parse_tree.getValue()  # should get a token.
-    if node_value[0] == Token.CONST:   # constant?
-        if not parse_tree.isLeaf():
-            print('evaluteTree found a constant node with branches',
-                  file=sus.stderr)
-        return node_value[1]  # return the value
-    elif node_value[0] == Token.RCAP_VAR:
-        return decodeRedcap_var(node_value[1])  # will return a tuple
-    elif node_value[0] == Token.OPER:
-        operator = node_value[1]
-        op = operators[operator]          # get the opperator routine
-        left = left_arg(parse_tree)     # might be None
-        right = right_arg(parse_tree)
-        val = eval(op + '(left,right)')
-        return val
-    elif node_value[0] == Token.FUNCT:
-        function = node_value[1]
-        func = functions[function]
-        f_args = []
-        for left_node in parse_tree.getLeftChild:
-            f_arg = evaluateTree(left_node)
-            f_args = fargs + [fa_arg]
-        val = eval(func + 'f_args)')
-        return val
-
-
-# evaluate parse tree.
-
-
-def evalParseTree(parse_tree):
+    """
+    take the parse tree passed as an argument and evaluate
+    it recursively
+    """
     operators = {
-        '&&': 'logicAnd',
+        '&&': 'logicAnd',  #
         '||': 'logicOr',
         '=': 'logicEq',
         '!=': 'logicNE',
@@ -788,35 +548,53 @@ def evalParseTree(parse_tree):
         '+': 'arithAdd',
         '-': 'arithSub',
         '^': 'arithExp',
-        'n': 'unary_negative'
+        'n': 'unary_negative',
         'p': 'unary_positive'
 
     }
 
     if not isinstance(parse_tree, BinaryTree):
-        err_str = 'error: evalParseTree has been called with an argument that is not a BinaryTree'
-        sys.exit(err_str)
+        return  # return none.  will normally be because we've
+        # reached the end of a branch so the child is None
 
-    val = None  # return value
-    if parse_tree.isLeaf():
-        return parse_tree.getValue()            # leaf nodes should contail a value
+    node_value = parse_tree.getValue()  # should get a token.
+    if node_value[0] == Token.CONST:   # constant?
+        if not parse_tree.isLeaf():
+            print('evaluteTree found a constant node with branches',
+                  file=sys.stderr)
+        return node_value[1]  # return the value
+    elif node_value[0] == Token.RCAP_VAR:
+        if not parse_tree.isLeaf():
+            print('evaluteTree found a REDCap variable node with branches',
+                  file=sys.stderr)
+        REDCap_obj = decodeRedcapVar(node_value[1])
+        return REDCap_obj.value
+    elif node_value[0] == Token.OPER:
+        # operators take one or two arguments so we'll evaluate
+        # left and right branches below this node.  Left branch will
+        # be none for a a single argument operator
+        left = evaluateTree(parse_tree.getLeftChild())
+        right = evaluateTree(parse_tree.getRightChild())
+        operator = node_value[1]
+        op = operators[operator]          # get the operator routine
+        val = eval(op + '(left,right)')
+        return val
 
-    # we ought to have an operator here
-    node_value = parse_tree.getValue()          # this will return a tuple
-    if type(node_value) != tuple:
-        err_str = 'error: evalParseTree has found a node that ought to be an operator that is not a tuple'
-        sys.exit(err_str)
-    operator = node_value[0]
-    if not operator in operators:
-        err_str = 'error: evalParseTree has found a node that ought to be an operator that is not a tuple: ' + operator
-        sys.exit(err_str)
+    elif node_value[0] == Token.FUNCT:
+        # functions are like operators except that they can have a
+        # variable number of arguments.  The arguments are contained
+        # as a tuple of nodes in the left branch.  Some branches may
+        # not need to be evaluated for all functions, e.g. one of the
+        # conditions in an if function so we'll defer evaluating until
+        # the function itself
+        function = node_value[1]
+        func = functions[function]
+        f_args = parse_tree.getLeftChild()  # tuple of trees
+        val = eval(func + 'f_args)')
+        return val
 
-    op = operators[operator]          # get the opperator routine
-    left = left_arg(parse_tree)     # might be None
-    right = right_arg(parse_tree)
 
-    val = eval(op + '(left,right)')
-    return val
+# evaluate parse tree.b
 
 
 def logicAnd(left, right):
@@ -929,7 +707,7 @@ def left_arg(parse_tree):
     if not left.isLeaf():                   # if it's not a leaf then call evalParseTree recursively
         return evaluateTree(left)
 
-    return left.getValue()                  # if it's a leaf then just reurn it's value
+    return left.getValue()                  # if it's a leaf then just return it's value
 
 
 def right_arg(parse_tree):
@@ -940,63 +718,19 @@ def right_arg(parse_tree):
     return right.getValue()
 
 
-def clean_participant(data_acc):
-    if len(data_acc) == 0:    # any data?
-        return []          # no: return empty list
-
-    # look to see if it's a void participant
-
-    for r in data_acc:
-        if r['redcap_event_name'] == 'administrative_inf_arm_1':
-            if r['void_participant'] == '1':
-                return []           # void participant so return an empty list
-
-    # now get rig of any pilot or disabled scans
-    scans = 0
-    data = []
-    for r in data_acc:
-        if r['redcap_event_name'] in ['neonatal_scan_arm_1',
-                                      'fetal_scan_arm_1']:
-            if r['scan_disabled'] == '1' or r['scan_pilot'] == '1':
-                continue
-            else:
-                scans += 1
-        data.append(r)
-
-    # if we didn't find any scans then return empty list
-
-    if scans == 0:
-        return []
-    else:
-        return data
-
-# build the metadata dictionary so we can find our variables easily
-# meta_dict={}
-# i=0
-# for var in meta:
-#    meta_dict[var['field_name']]=i
-#    i +=1
-#
-# REDCap will return a list of dictionaries one, dictionary for each event.
-# the trouble is that each dictionary will have entries for all the variables
-# we asked for, whether they exist in that event or not so we'll have to
-# do a complicated set of loops.
-# OUTERMOST LOOP: read through the dictionary one variable at a time
-# MIDDLE LOOP: get the form name for the variable and loop through the
-#    form_event_map looking for entries that reference this form.  There may be
-#    more than one if the form is mapped into more than one event.
-# INNER LOOP: When we find the form name, loop through the returned data and
-#   process the value found in that event.  We will have to loop through all
-#    data because there may be multiple instances of the event
-
-
-def process_participant(data, dictionary, fem):
-    is_repeat = {
-        'dna_sample': ['baby_born_arm_1',
-                       '18_month_assessment_arm_1'],
-        'post_scan_events': ['post_scan_event_arm_1']
-    }
-    for var, rec in dictionary.items():
+def process_participant(args, data, dictionary, fem):
+    """
+    OUTERMOST LOOP: read through the dictionary one variable at a time
+    MIDDLE LOOP: get the form name for the variable and loop through the
+       form_event_map looking for entries that reference this form. There
+       may be more than one if the form is mapped into more than one event.
+    INNER LOOP: When we find the form name, loop through the returned data and
+      process the value found in that event.  We will have to loop through all
+       data because there may be multiple instances of the event
+    """
+    global Field_Value  # value of current variable
+    global Current_Variable
+    for Current_Variable, rec in dictionary.items():
         form = rec['form_name']
 
         # now we're going to loop through the form_event_table looking
@@ -1007,10 +741,10 @@ def process_participant(data, dictionary, fem):
             if form == form_event['form']:
                 event = form_event['unique_event_name']
 
-    # now go find that event in the REDCap data
-    # need to check that the event name is right for this variable
-    # and also that the form name matches the redcap repeat instrument
-    # latter will only matter for repeating forms in non-repeating events
+                # now go find that event in the REDCap data. Need to check
+                # that the event name is right for this variable and also that
+                # the form name matches the redcap repeat instrument. Latter
+                # will only matter for repeating forms in non-repeating events.
                 for entry in data:  # data is also a list of dictionaries
                     # matched the event.  now check for repeat instruments
                     if entry['redcap_event_name'] == event:
@@ -1023,45 +757,52 @@ def process_participant(data, dictionary, fem):
                         elif entry['redcap_repeat_instrument'] != '':
                             continue
 
-                        field_value = process_fields(var, entry, dictionary)
-                        if field_value is None:
+                        # field_value = process_fields(var, entry, dictionary)
+                        Field_Value = return_redcap_var(Current_Variable,
+                                                        entry, dictionary)
+                        if Field_Value is None:
                             sys.exit('Parser failure')
 
-                        branch_str = parse_branch(var, meta, entry, data)
+                        branch_str = dictionary[Current_Variable]['branching_logic']
+                        if branch_str != '':
+                            tree = parseExpression(branch_str)
+                            print(Current_Variable, Field_Value, type(tree))
                         branch = True  # default is that item isn't hidden
-                        if branch_str:
-                            tree = buildParseTree(branch_str)
-                            branch = evalParseTree(tree)
+                        # if branch_str:
+                        #     tree = buildParseTree(branch_str)
+                        #     branch = evalParseTree(tree)
 
-                        if branch:  # these are the records we want
-                            if rec['black_list']:
+                        # if branch:  # these are the records we want
+                        #     if rec['black_list']:
 
-                                black_list = rec['black_list'].split('|')
-                                if len(field_value) > 0:
-                                    check = field_value[0]
-                                else:
-                                    check = ''
+                        #         black_list = rec['black_list'].split('|')
+                        #         if len(Field_Value) > 0:
+                        #             check = Field_Value[0]
+                        #         else:
+                        #             check = ''
 
-                                if check in black_list:
-                                    out_write.writerow([entry['participationid'], entry['redcap_event_name'],
-                                                        entry['redcap_repeat_instance'], var,
-                                                        'Missing Value', field_value])
+                        #         if check in black_list:
+                        #             out_write.
+                        #             writerow([entry['participationid'],
+                        #                       entry['redcap_event_name'],
+                        #                       entry['redcap_repeat_instance'],
+                        #                       Current_Variable,
+                        #                       'Missing Value', Field_Value])
 
     return
 
 
-def _participant_(rec):
-    """function to return the participantid for this record"""
-    return rec['participationid']
-
-
-def return_data(big_data):
+def return_data(args, big_data):
     """
     return a list of records for a single participant.  need to pass an
     iterator of big_data.  big_data doesn't
     need to be sorted in any particular order but records for a given
     participant must be adjacent
     """
+    def _participant_(rec):
+        """function to return the participantid for this record"""
+        return rec['participationid']
+
     grouped_data = itertools.groupby(big_data, _participant_)
     for key, gen in grouped_data:
 
@@ -1109,6 +850,111 @@ def return_data(big_data):
             yield data
 
 
+def BuildDictionary(args, meta):
+    """
+    build a dictionary of all variables in which we're interested.  This will
+    combine input file with the project metadata extracted from REDCap.  The
+    output will contain all the project data but only for variables specified
+    in the input file.  The infile will also contribute test logic expressions
+    to be used in validating the field.  Will return as a dictionary of
+    dictionaries.  Input file can be Excel file or .csv
+    """
+    infile = args.dictionary
+    _fpat_ = re.compile(r'\s*(?P<file>.*xls[xmb]?)\s*(\[\s*(?P<sheet>.*)\b)')
+    match = _fpat_.match(infile)  # test if filespec is Excel
+
+    '''
+    Build a dictionary of dictionaries.  Top level uses the variable name
+    from 1st column as a key with value equal to a dictionary of all the
+    other variables in the row with each getting a key equal to the column
+    heading
+    '''
+    dictionary = {}
+    if match:  # if we matched then it's an Excel file
+        print('reading Excel File')
+        # read the data dictionary
+        dict_cols = {}
+        infile = load_workbook(match.group('file'))
+        if match.group('sheet'):
+            source = infile[match.group('sheet')]
+        else:
+            source = infile.active
+        dg = source.iter_rows(min_row=1, values_only=True)
+        header = next(dg, None)  # get the header row
+
+        # if we have a field called 'Ignore' then flag which column
+        ig_col = header.index('Ignore') if 'Ignore' in header else -999
+        # then loop through the data rows.  Will return a tuple each time
+        for rec in dg:
+            if ig_col >= 0:
+                if rec[ig_col] in ['Yes', 1, '1', True]:
+                    continue
+            dic_entry = {}
+            for i in range(1, len(header)):
+                if rec[i] is None:
+                    dic_entry[header[i].lower().replace(' ', '_')] = ''
+                else:
+                    dic_entry[header[i].lower().replace(' ', '_')] = rec[i]
+
+            dictionary[rec[0]] = dic_entry
+
+        infile.close()
+
+    else:
+        print('reading .csv file')
+        with open(infile, 'r') as f:
+            inreader = csv.reader(f)
+            headers = next(inreader, None)
+            ig_col = header.index('Ignore') if 'Ignore' in header else -999
+            dictionary = {}
+            for rec in inreader:
+                if ig_col > 0:
+                    if rec[ig_col] in ['Yes', 1, '1', True]:
+                        continue
+                dic_entry = {}
+                for i in range(1, len(header)):
+                    dic_entry[header[i].lower().replace(' ', '_')] = rec[i]
+                dictionary[rec[0]] = dic_entry
+
+    # now merge the project meta into dictionary
+    for row in meta:
+        if row['field_name'] in dictionary:
+            for key, value in row.items():
+                if (key != 'field_name' and
+                        not (args.xlimits and
+                             key.startswith('text_validation'))):
+                    dictionary[row['field_name']][key] = value
+
+    """
+    Check date format.  We can distinguish betweem date and datetime but we
+    don't have any good way of distinguishing between day-month-year and
+    month-day-year. To address scan the dictionary looking for the text
+    validation values.  We have to assume that we won't have a mixture of US
+    and normal dates in the same project.
+    """
+    global American_Date
+    American_Date = False
+    for r in dictionary.values():
+        if r['field_type'] == 'text':
+            ft = r['text_validation_type_or_show_slider_number']
+            if ft:
+                if ft.find('mdy') >= 0:
+                    American_Date = True
+
+    return dictionary
+
+
+# main program
+global is_repeat  # used in process_participant
+global _checkbox_  # will be used in return_redcap_var
+_checkbox_ = re.compile(
+    r'(\S+)\(([a-z0-9-]+)\)|(\S+?)(\_{3,4}[a-z0-9-]+$)')
+is_repeat = {
+    'dna_sample': ['baby_born_arm_1',
+                   '18_month_assessment_arm_1'],
+    'post_scan_events': ['post_scan_event_arm_1']
+}
+
 parser = argparse.ArgumentParser(description='RedCap REST client')
 parser.add_argument('--dictionary', type=str,
                     default='Codebook for Error Check.xlsx [Working Copy]',
@@ -1143,9 +989,16 @@ parser.add_argument('records_of_interest', metavar='ID', type=str, nargs='*',
                     help='a list of subject IDs to fetch metadata from')
 args = parser.parse_args()
 
-
 # fetch API key from ~/.redcap-key ... don't keep in the source
 key_filename = os.path.expanduser('~') + '/.redcap-key'
+if not os.path.isfile(key_filename):
+    print('redcap key file {} not found'.format(key_filename),
+          file=sys.stderr)
+    sys.exit(1)
+api_key = open(key_filename, 'r').read().strip()
+
+api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dhcp specific
+project = Project(api_url, api_key)
 if not os.path.isfile(key_filename):
     print('redcap key file {} not found'.format(key_filename))
     sys.exit(1)
@@ -1153,81 +1006,13 @@ api_key = open(key_filename, 'r').read().strip()
 
 api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dHCP specific
 project = Project(api_url, api_key)
-
-
-"""
-Check and see if the dictionary file is an Excel spreadsheet.  If it isn't,
-assume it's a comma seperated file.  Excel file specification will be of the
-form filespec.xl* optionally followed by [Worksheet]. [] are used to contain
-the worksheet name beacuse those characters won't occur in the full filespec.
-If no worksheet is specified then program will use the active sheet in the
-workbook.
-If file extension isn't .xls* then assume it's a comma seperated file with the
-column headers in the first row
-"""
-
-fpat = re.compile(r'\s*(?P<file>.*xls[xmb]?)\s*(\[\s*(?P<sheet>.*)\b)')
-match = fpat.match(args.dictionary)
-
-'''
-Build a dictionary of dictionaries.  Top level uses the variable name
-from 1st column as a key with value equal to a dictionary of all the
-other variables in the row with each getting a key equal to the column
-heading
-'''
-dictionary = {}
-if match:  # if we matched then it's an Excel file
-    print('reading Excel File')
-    # read the data dictionary
-    dict_cols = {}
-    infile = load_workbook(match.group('file'))
-    if match.group('sheet'):
-        source = infile[match.group('sheet')]
-    else:
-        source = infile.active
-    dg = source.iter_rows(min_row=1, values_only=True)
-    header = next(dg, None)  # get the header row
-
-    # if we have a field called 'Ignore' then flag which column
-    ig_col = header.index('Ignore') if 'Ignore' in header else -999
-    # then loop through the data rows.  Will return a tuple each time
-    for rec in dg:
-        if ig_col >= 0:
-            if rec[ig_col] in ['Yes', 1, '1', True]:
-                continue
-        dic_entry = {}
-        for i in range(1, len(header)):
-            if rec[i] is None:
-                dic_entry[header[i].lower().replace(' ', '_')] = ''
-            else:
-                dic_entry[header[i].lower().replace(' ', '_')] = rec[i]
-
-        dictionary[rec[0]] = dic_entry
-
-    infile.close()
-
-else:
-    print('reading .csv file')
-    with open(args.dictionary, 'r') as infile:
-        inreader = csv.reader(infile)
-        headers = next(inreader, None)
-        ig_col = header.index('Ignore') if 'Ignore' in header else -999
-        dictionary = {}
-        for rec in inreader:
-            if ig_col > 0:
-                if rec[ig_col] in ['Yes', 1, '1', True]:
-                    continue
-            dic_entry = {}
-            for i in range(1, len(header)):
-                dic_entry[header[i].lower().replace(' ', '_')] = rec[i]
-            dictionary[rec[0]] = dic_entry
-
+meta = project.export_metadata()  # get the project metadata
+dictionary = BuildDictionary(args, meta)
 fields_of_interest = list(dictionary.keys())
 
 """
-get the data from REDCap.  Will retrieve three lists:
+get the data from REDCap.  Will retrieve two lists:
     big_data is a list of all the data
-    meta is the meta data
     fem is the form event mapping
 this takes some time so running interactively we can save time by not reading
 again if the data already exists.  Will assume that if big_data exists then
@@ -1241,16 +1026,6 @@ except NameError:
     args.reuse = False  # force a load
 if not args.reuse:
     print('loading REDCap data')
-    # fetch API key from ~/.redcap-key ... don't keep in the source
-    key_filename = os.path.expanduser('~') + '/.redcap-key'
-    if not os.path.isfile(key_filename):
-        print('redcap key file {} not found'.format(key_filename),
-              file=sys.stderr)
-        sys.exit(1)
-    api_key = open(key_filename, 'r').read().strip()
-
-    api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'  # dhcp specific
-    project = Project(api_url, api_key)
 
     fields_of_interest = list(dictionary.keys())
     try:
@@ -1261,71 +1036,11 @@ if not args.reuse:
         print('Redcap export too large', file=sys.stderr)
         sys.exit(1)
 
-    meta = project.export_metadata()                # metadata
     fem = project.export_fem()                      # form event mappings
-    """
-    copy any meta fields that aren't in the dictionary into it.  If field
-    already exists then over-ride it with the exception of
-    text_validation_min and max. Those will be spared if --xlimits flag
-    is set to allow us to use the limits from the external dictionary.
-    This step allows us to use dictionary rather than meta everywhere.
-    dictionary is a dictionary of disctionaries rather than a list
-    of dictionaries so field lookup is faster
 
-    If the input dictionary was downloaded REDCap codebook then it will
-    have the same items as meta but with text descriptions rather than
-    variable names.  In fact the only thing we want from the codebook
-    is the varaible name plus the added fields, e.g. Ignore and
-    black_list and possible min and max value.  When we rtead the header
-    we forced to lower case and replaced spaces with '_' so most of the
-    fields will be over-written.  A couple won't be but they can just
-    sit as garbage in the dictionary as they're never referenced
-    """
-for row in meta:
-    if row['field_name'] in dictionary:
-        for key, value in row.items():
-            if (key != 'field_name' and
-                    not (args.xlimits and
-                         key.startswith('text_validation'))):
-                dictionary[row['field_name']][key] = value
-
-"""
-Check date format.  We can distinguish betweem date and datetime but we don't
-have any good way of distinguishing between day-month-year and month-day-year
-To address scan the dictionary looking for the text validation values
-We have to assume that we won't have a mixture of US and normal dates in the
-same project
-"""
-_American_Date_ = False
-for r in dictionary.values():
-    if r['field_type'] == 'text':
-        ft = r['text_validation_type_or_show_slider_number']
-        if ft:
-            if ft.find('mdy') >= 0:
-                _American_Date_ = True
-
-# open the Excel workbook that has the variables to check
-
-# infile = load_workbook('Codebook for Error Check.xlsx')
-# source = infile['Working Copy']
-
-codebook = []
-
-# codebook is deprecated and will be removed
-# for row in source.iter_rows(min_row=2, values_only=True):
-#     if row[19] != 'Yes':
-#         codebook.append(row)
-
-out = open('dHCPmissing.txt', 'w', newline='')
-out_write = csv.writer(out, quotechar="'", delimiter='\t')
-out_write.writerow(['participant', 'event', 'event_repeat',
-                    'variable', 'error', 'value'])
-
-
-# ibd = iter(big_data)  # create iterable
-for data in return_data(big_data):
+for data in return_data(args, big_data):
     if len(data) > 0:                     # have we got any?
         # yes: process them
-        process_participant(data, dictionary, fem)
+        process_participant(args, data, dictionary, fem)
 
-out.close()  # close the output file
+# out.close()  # close the output file
