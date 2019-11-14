@@ -18,9 +18,9 @@ import datetime
 # import json
 import itertools
 import argparse
-# from openpyxl import Workbook, load_workbook
-# from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
-# from openpyxl.worksheet.pagebreak import Break
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Border, Side, Alignment, Protection, Font
+from openpyxl.worksheet.pagebreak import Break
 from copy import copy
 import csv
 from pythonds.basic import Stack

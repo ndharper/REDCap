@@ -22,6 +22,8 @@ from operator import itemgetter
 import urllib3
 import sys
 import os
+import math
+import statistics
 urllib3.disable_warnings()
 
 
@@ -44,7 +46,14 @@ class REDCap_variable:
         if value:
             self.value = value
         else:
-            self.value = lit
+            try:
+                self.value = int(lit)  #  see if we have an integer
+            except ValueError:
+                pass  # we'll try a float
+            try:
+                self.value = float(lit)
+            except ValueError:
+                self.value = lit
         self.label = label
 
     def __str__(self):
@@ -76,8 +85,9 @@ def return_redcap_var(var, entry, dictionary):
 
     if var not in dictionary:  # should only happen for checkbox
         """ need to process checkbox variables that can come in in
-        either varaibale(opt) or variable__option form"""
+        either variabale(opt) or variable__option form"""
         # _checkbox_ is global.  Got decalered and compiled in __main__
+
         match = _checkbox_.search(var)
         if match.group(1) in dictionary:  # bracket form
             m_ent = dictionary[match.group(1)]
@@ -95,6 +105,7 @@ def return_redcap_var(var, entry, dictionary):
             return None  # signal failure with None return
         result = (entry[var_key], )  # '0' or '1'
         choices = unpack_choices(m_ent['select_choices_or_calculations'])
+        field_value = entry[var_key]
         return REDCap_variable(lit=entry[var_key], label=choices[choice])
     var_type = dictionary[var]['field_type']
     m_ent = dictionary[var]  # meta entry
@@ -153,7 +164,7 @@ def return_redcap_var(var, entry, dictionary):
     # calc or notes fields.  Return tuple with just a single
     # entry, value in the fields. Blanks may be valid values for these fields
     elif var_type == 'calc' or var_type == 'notes':
-        return REDCap_variable([entry[var]])
+        return REDCap_variable(entry[var])
 
     # has to be a text field.  Return the value and the text_type so
     # we can decode it later
@@ -269,7 +280,7 @@ _token_re = re.compile(r"""
 |&&)                    # logical and
 
                     # Functions
-|((?P<funcs>datediff     # datediff - 5 parameters
+|((?P<funcs>datediff    # datediff - 5 parameters
 |sum                    # sum - followed by list
 |abs                    # absolute value
 |min                    # minimum - argument is list
@@ -292,6 +303,19 @@ _token_re = re.compile(r"""
 |(?P<errs>\S[a-zA-Z0-9_\.]*)
                       """, re.VERBOSE)
 
+# regex to parse the conetents of a quoted string
+
+_token_str_ = re.compile(r"""
+    (?P<fcons>[+-]?\d*\.\d*)    # floating point number
+    |(?P<icons>[+-]?\d+)        # fixed point number
+    |(?P<truec>true)            # boolean True
+    |(?P<falsec>false)          # boolean False
+    |(?P<date3>\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})
+    |(?P<date2>\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})
+    |(?P<date1>\s*\d{4}-\d{2}-\d{2})
+    |(?P<time>>\s*\d{2}:\d{2})
+    """, re.VERBOSE)
+
 
 class Token(Enum):
     """ enumeration token types """
@@ -307,8 +331,36 @@ def tokenise(s):
     ''' return the tokens one by one'''
     for match in _token_re.finditer(s):
         # various types of constant
-        if match.group('strc'):
-            yield Token.CONST, match.group('strc')
+        if match.group('strc'):  # quoted string
+            # try and convert string if we can
+            string_cons = _token_str_.search(match.group('strc'))
+            if string_cons.group('fcons'):  # float including leadinf +/-
+                yield Token.CONST, float(string_cons.group('fcons'))
+            elif string_cons.group('icons'):  # integer including leading +/-
+                yield Token.CONST, int(string_cons.group('icons'))
+            elif string_cons.group('truec'):   # boolean true
+                yield Token.CONST, True
+            elif string_cons.group('falsec'):  # boolean false
+                yield Token.CONST, False
+            elif string_cons.group('date3'):  # datetime with HMS
+                yield Token.CONST, datetime.datetime.\
+                    strptime(string_cons.group('date3', '%Y-%m-%d %H:%M:%S'))
+
+            elif string_cons.group('date2'):  # datetime with HM
+                yield Token.CONST, datetime.datetime.\
+                    strptime(string_cons.group('date3', '%Y-%m-%d %H:%M'))
+
+            elif string_cons.group('date1'):  # datetime with no time
+                yield Token.CONST, datetime.datetime.\
+                    strptime(string_cons.group('date3', '%Y-%m-%d'))
+
+            elif string_cons.group('time'):  # datetime with time only
+                yield Token.CONST, datetime.datetime.\
+                    strptime(string_cons.group('date3', '%H:%M'))
+
+            else:  # can't do anything with it.  Just return as string
+                yield Token.CONST, match.group('strc')
+
         elif match.group('fcons'):
             yield Token.CONST, float(match.group('fcons'))
         elif match.group('icons'):
@@ -346,73 +398,7 @@ def tokenise(s):
             yield Token.ERR, match.group('errs')
 
 
-def parse_branch(var, meta, my_event, big_data):
-    rvar_pat = re.compile(r'\[(.*?)\]')
-    str_pat = re.compile(r'\'(.*?)\'')
-    paren_pat = re.compile(r'\((.*?)\)')
-    operators = {
-        '=': '=',
-        '>=': '>=',
-        '>': '>',
-        '<': '<',
-        '=>': '>=',
-        '<=': '<=',
-        '=<': '<=',
-        '!=': '!=',
-        '<>': '!=',
-        'and': 'and',
-        'or': 'or',
-        ')': ')',
-        '(': '('}
 
-    out_list = []
-    for entry in meta:
-        if entry['field_name'] == var:
-            break
-
-    if entry['field_name'] != var:
-        # this will happen if the var isn't in the meta data list - error
-        return
-
-    if entry['branching_logic'] == '':
-        return  # we've found it but it doesn't have any branching logic
-
-    # now we should have alist of individual terms
-    terms = entry['branching_logic'].split()
-#
-    for term in terms:
-        # looking for redcap variable
-        matches = rvar_pat.findall(term)
-        # we've only got a single term so it must be in current entry
-        if len(matches) == 1:
-            # subsitute baby(1) = baby___1
-            a = paren_pat.sub('___\g<1>', matches[0])
-
-            out_list.append(my_event[a.lower()])
-
-        # if there are two [xxx][yyy] then we have both an event and a variable
-        elif len(matches) == 2:
-            for entry2 in big_data:  # search through all of big data
-                if matches[0] == entry2['redcap_event_name']:
-                    # subsitute baby(1) = baby___1
-                    a = paren_pat.sub('___\g<1>', matches[1])
-                    out_list.append(entry2[a.lower()])
-                    break
-        else:
-            # not a redcap variable.  Look for string argument wrapped in quotes
-
-            matches = str_pat.findall(term)  # should find either 0 or 1
-            if len(matches) > 0:
-                out_list.append(matches[0])  # will strip the wrapping quotes
-
-        # search for operators or paren
-            elif term.strip() in operators:
-                out_list.append('%$*&' + term.strip())
-
-            else:
-                out_list.append(term)
-
-    return out_list     # should tokenise
 
 
 def getPrec(node):
@@ -519,17 +505,8 @@ def parseExpression(s):
     return TreeRoot.deleteNode()  # snip the initial fake '('
 
 
-# try and recast argumet
-
-def recast_arg(arg):
-    if type(arg) in [bool, int, float]:
-        return arg  # we're good
-    if type(arg) == str:  # check and see if we have a date
-
-        # new evaluate parse tree
-
-
-def evaluateTree(parse_tree):
+def evaluateTree(parse_tree, entry, dictionary):
+    print(parse_tree.printTree())
     """
     take the parse tree passed as an argument and evaluate
     it recursively
@@ -539,6 +516,7 @@ def evaluateTree(parse_tree):
         '||': 'logicOr',
         '=': 'logicEq',
         '!=': 'logicNE',
+        '!': 'logicNOT',
         '>': 'logicGT',
         '>=': 'logicGE',
         '<': 'logicLT',
@@ -551,6 +529,23 @@ def evaluateTree(parse_tree):
         'n': 'unary_negative',
         'p': 'unary_positive'
 
+    }
+
+    functions = {
+        'datediff': '_datediff_',
+        'sum': '_sum_',
+        'abs': '_abs_',
+        'min': '_min_',
+        'max': '_max_',
+        'sqrt': '_sqrt_',
+        'mean': '_mean_',
+        'median': '_median_',
+        'stdev': '_stdev_',
+        'roundup': '_roundup_',
+        'rounddown': '_rounddown_',
+        'round': '_round_',
+        'if': '_if_',
+        'in': '_in_'
     }
 
     if not isinstance(parse_tree, BinaryTree):
@@ -567,26 +562,30 @@ def evaluateTree(parse_tree):
         if not parse_tree.isLeaf():
             print('evaluteTree found a REDCap variable node with branches',
                   file=sys.stderr)
-        REDCap_obj = decodeRedcapVar(node_value[1])
+        REDCap_obj = decodeRedcapVar(node_value[1], entry, dictionary)
         return REDCap_obj.value
     elif node_value[0] == Token.OPER:
         # operators take one or two arguments so we'll evaluate
         # left and right branches below this node.  Left branch will
         # be none for a a single argument operator
-        left = evaluateTree(parse_tree.getLeftChild())
-        right = evaluateTree(parse_tree.getRightChild())
+        left = evaluateTree(parse_tree.getLeftChild(), entry, dictionary)
+        right = evaluateTree(parse_tree.getRightChild(), entry, dictionary)
         operator = node_value[1]
         op = operators[operator]          # get the operator routine
+#        print(left, operator, right)
+
         val = eval(op + '(left,right)')
         return val
 
     elif node_value[0] == Token.FUNCT:
-        # functions are like operators except that they can have a
-        # variable number of arguments.  The arguments are contained
-        # as a tuple of nodes in the left branch.  Some branches may
-        # not need to be evaluated for all functions, e.g. one of the
-        # conditions in an if function so we'll defer evaluating until
-        # the function itself
+        """
+        functions are like operators except that they can have a
+        variable number of arguments.  The arguments are contained
+        as a tuple of nodes in the left branch.  Some branches may
+        not need to be evaluated for all functions, e.g. one of the
+        conditions in an if function so we'll defer evaluating until
+        the function itself
+        """
         function = node_value[1]
         func = functions[function]
         f_args = parse_tree.getLeftChild()  # tuple of trees
@@ -594,17 +593,19 @@ def evaluateTree(parse_tree):
         return val
 
 
-# evaluate parse tree.b
+# parse tree functiuons
 
 
 def logicAnd(left, right):
-    return left and right
+    return bool(left) and bool(right)
 
 
 def logicOr(left, right):
-    return left or right
+    return bool(left) or bool(right)
 
-# test that two arguments are equal.  Returns either True or False
+
+def logicNOT(left, right):
+    return bool(right)
 
 
 def logicEq(left, right):
@@ -613,14 +614,15 @@ def logicEq(left, right):
 
     # they don't match but make sure the problem isn't a type mis-match
 
-    elif type(left) == type(right):      # if they're the same type and they don't match
-        return False                    # then they definately don't match
+    elif type(left) == type(right):  # if they're the same type and they don't
+        return False                 # match then they definately don't match
 
-    elif str(left) == str(right):       # try converting both to str.  str(str)==str
+    elif str(left) == str(right):  # try converting both to str.  str(str)==str
         return True
 
     else:
-        return False                    # gave it our best and it didn't match
+        return False                # gave it our best and it didn't match
+
 
 # test for not equal.  Be lazy and just test for equal and negate
 
@@ -628,94 +630,190 @@ def logicEq(left, right):
 def logicNE(left, right):
     return not(logicEq(left, right))
 
-# all the logical compares will need numeric argument.  Function to ttry to
-# convert strings.  Returns tuple(left,right)
-
-
-def fixType(left, right):
-    if type(left) == str:       # string?
-        if len(left) == 0:
-            return None         # warn to caller that we don't have number
-        elif '.' in left:         # yes - does it have a decimal?
-            left = float(left)  # yes then try to make it float
-        else:
-            left = int(left)    # no decimal - try to make it int
-    if type(right) == str:
-        if len(right) == 0:
-            return None
-        elif '.' in right:
-            right = float(right)
-        else:
-            right = int(right)
-    return (left, right)
-
-# is left >= right
-
 
 def logicGE(left, right):
-    a = fixType(left, right)
-    if a == None:
-        return False
-    return a[0] >= a[1]
+    return left >= right
 
 
 def logicLE(left, right):
-    a = fixType(left, right)
-    if a == None:
-        return False
-    return a[0] <= a[1]
+    return left <= right
 
 
 def logicGT(left, right):
-    a = fixType(left, right)
-    if a == None:
-        return False
-    a = fixType(left, right)
-    return a[0] > a[1]
+    return left > right
 
 
 def logicLT(left, right):
-    a = fixType(left, right)
-    if a == None:
-        return False
-    a = fixType(left, right)
-    return a[0] < a[1]
+    return left < right
 
 
 def arithMul(left, right):
-    return
+    return left * right
 
 
 def arithDiv(left, right):
-    return
+    return left / right
 
 
 def arithAdd(left, right):
-    return
+    return left + right
 
 
 def arithSub(left, right):
-    return
+    return left - right
 
 
 def arithExp(left, right):
+    return left ** right
+
+
+def unaray_negative(left, right):
+    return -right
+
+
+def unary_positive(left, right):
+    return right
+
+
+"""
+functions.  A difference between functions and operators is that an operator
+expects the arguments to be fully resolved before the operator is called.
+Functions are passed a tuple of branches and the function is responsible
+for processing the branches before evaluationg the function.
+"""
+
+
+def _list_args_(args):
+    """
+    evaluate all the branches returning as a list of values.  Used by the
+    sum, mean, median and stdev functions
+    """
+    arg_list = []
+    for a in args:
+        arg_list.append(evaluateTree(a))
+    return arg_list
+
+
+# strptime formats
+strptime_fmt = {
+    'ymd': '%Y-%m-%d',
+    'mdy': '%m-%d-%Y',
+    'dmy': '%d-%m-%Y'
+}
+
+time_fmt = ['', ' %H:%M', ' %H:%M:%S']
+
+
+def _make_date_object_(arg, fmt):
+    if type(arg) == datetime:
+        return arg
+    else:
+        if arg == 'today':
+            return datetime.today()
+        elif arg == 'now':
+            return datetime.now()
+        else:
+            dfmt_str = strptime_fmt[dfmt]
+            # now see if we have any time component
+            tc = arg.count(':')
+            dmft_str = dfmt_str + time_fmt[tc]
+            return datetime.strptime(arg, dfmt_str)
+
+
+def _datediff_(args):
+    scale = {
+        's': 1,
+        'm': 60,
+        'h': 3600,
+        'd': 86400,
+        'M': 26300160,
+        'y': 960593618.9
+    }
+
+    # evaluate the branches.  Can't be sure how many we have
+    arg_list = _list_args_(args)
+    # now check the dateformates.
+    if arg_list[3] in ['ymd', 'mdy', 'dmy']:
+        dfmt = arg_list[3]  # got it
+    else:
+        dfmt = 'ymd'  # default
+
+    date1 = _make_date_object_(args[0], dfmt)
+    date2 = _make_date_object_(args[1], dfmt)
+    datediff = date2 - date1  # time delta object
+    days, seconds = datediff.days, datediff.seconds
+    total_secs = days * 60 * 60 * 24 + seconds
+    signed = False
+    if type(arg_list[-1]) == bool:
+        signed = arg_list[-1]
+    if not signed:
+        total_secs = abs(total_secs)
+
+    units = arg_list[2]  # what units?
+    result = total_secs / scale[units]
+    return result
+
     return
 
 
-def left_arg(parse_tree):
-    left = parse_tree.getLeftChild()
-    if not left.isLeaf():                   # if it's not a leaf then call evalParseTree recursively
-        return evaluateTree(left)
-
-    return left.getValue()                  # if it's a leaf then just return it's value
+def _sum_(args):
+    return sum(_list_args_(args))
 
 
-def right_arg(parse_tree):
-    right = parse_tree.getRightChild()
-    if not right.isLeaf():                   # if it's not a leaf then call evalParseTree recursively
-        return evaluateTree(right)
+def _abs_(args):
+    return abs(evaluateTree(args[0]))
 
-    return right.getValue()
+
+def _min_(args):
+    return min(_list_args_(args))
+
+
+def _max_(args):
+    return max(_list_args_(args))
+
+
+def _sqrt_(args):
+    return math.sqrt(evaluateTree(args[0]))
+
+
+def _mean_(args):
+    return statistics.mean(_list_args_(args))
+
+
+def _median_(args):
+    return statistics.median(_list_args_(args))
+
+
+def _stdev_(args):
+    return statistics.stdev(_list_args_(args))
+
+
+def _roundup_(args):
+    operand = evaluateTree(args[0])   # the number we're trying to round
+    places = int(evaluateTree(args[1]))   # number of decimals
+    a = operand * 10 ** places  # shift so we can use ceil functon
+    return math.ceil(a) * 10 ** (- places)  # shift it back
+
+
+def _rounddown_(args):
+    operand = evaluateTree(args[0])   # the number we're trying to round
+    places = int(evaluateTree(args[1]))   # number of decimals
+    a = operand * 10 ** places  # shift so we can use ceil functon
+    return math.floor(a) * 10 ** (- places)  # shift it back
+
+
+def _round_(args):
+    operand = evaluateTree(args[0])   # the number we're trying to round
+    places = int(evaluateTree(args))   # number of decimals
+    return round(operand, places)
+
+
+def _if_(args):
+    cond = evaluateTree(args[0])
+    if cond:
+        return evaluateTree(args[1])
+    else:
+        return evaluateTree(args[2])
 
 
 def process_participant(args, data, dictionary, fem):
@@ -766,12 +864,7 @@ def process_participant(args, data, dictionary, fem):
                         branch_str = dictionary[Current_Variable]['branching_logic']
                         if branch_str != '':
                             tree = parseExpression(branch_str)
-                            print(Current_Variable, Field_Value, type(tree))
-                        branch = True  # default is that item isn't hidden
-                        # if branch_str:
-                        #     tree = buildParseTree(branch_str)
-                        #     branch = evalParseTree(tree)
-
+                            branch = evaluateTree(tree, entry, dictionary)
                         # if branch:  # these are the records we want
                         #     if rec['black_list']:
 
@@ -948,7 +1041,7 @@ def BuildDictionary(args, meta):
 global is_repeat  # used in process_participant
 global _checkbox_  # will be used in return_redcap_var
 _checkbox_ = re.compile(
-    r'(\S+)\(([a-z0-9-]+)\)|(\S+?)(\_{3,4}[a-z0-9-]+$)')
+    r'(\S+)\(([A-Za-z0-9-]+)\)|(\S+?)(\_{3,4}[A-Za-z0-9-]+$)')
 is_repeat = {
     'dna_sample': ['baby_born_arm_1',
                    '18_month_assessment_arm_1'],

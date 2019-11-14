@@ -26,6 +26,23 @@ class BinaryTree:
         self.left = None
         self.right = None
 
+    def __repr__(self):
+        return ('BT(%r, %r ) ') % (self.value, self.precedence)
+
+    def __str__(self, depth=0):
+        return ('BT(%r, %r ) left = %r, right = %r') %\
+            (self.value, self.precedence, self.left, self.right)
+
+    def printTree(self, depth=0, space=25):
+        rtn = ''
+        if self.right:
+            rtn += self.right.printTree(depth + 1)
+        rtn += '\n' + ' ' * (space * depth) + repr(self)
+        if self.left:
+            rtn += self.left.printTree(depth + 1)
+        return rtn
+
+
     # get functions for value and children
 
     def getValue(self):
