@@ -56,7 +56,7 @@ api_key = open(key_filename, 'r').read().strip()
 api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'
 project = Project(api_url, api_key)
 
-infile=load_workbook('DataCheckingTemplate.xlsx')
+infile=load_workbook('Data_Checking_Template.xlsx')
 source=infile['Checking Lists']
 outfile_name='checking_batch.xlsx'
 records_of_interest=[]
@@ -69,6 +69,8 @@ for row in source:
         if row[0].value[:2].strip()=='CC':
             records_of_interest.append(row[0].value.strip())
             
+print(records_of_interest)
+
 
 # get the metadata, form to event mapping and data for this record
 #records_of_interest=['CC00106XX07']

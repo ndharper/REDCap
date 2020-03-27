@@ -35,7 +35,7 @@ urllib3.disable_warnings()
 
 
 def unpack_choices(m_ent):
-    """ return dictionary of vale: choce """
+    """ return dictionary of vale: choice """
     result = {}
 
     choices = m_ent.split('|')      # break into list of choices
