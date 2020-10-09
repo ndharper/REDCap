@@ -18,12 +18,28 @@ import certifi
 import json
 import argparse
 
+# fetch API key from ~/.redcap-key ... don't keep in the source
+key_filename = os.path.expanduser('~') + '/.redcap-key'
+if not os.path.isfile(key_filename):
+    print('redcap key file {} not found'.format(key_filename))
+    sys.exit(1)
+api_key = open(key_filename, 'r').read().strip()
+api_url = 'https://externalredcap.isd.kcl.ac.uk/api/'
+project = Project(api_url, api_key)
 
-URL = 'https://externalredcap.isd.kcl.ac.uk/api/'
-api_url = URL
-api_key = ''
-records_of_interest= []
-records_of_interest.append(sys.argv[1])
+parser = argparse.ArgumentParser(
+    description='Extract the 18 Month Follow up Data')
+parser.add_argument('records_of_interest', metavar='ID', type=str, nargs='*',
+                    help='a list of subject IDs to fetch metadata from')
+
+
+
+args = parser.parse_args()
+
+
+records_of_interest= args.records_of_interest
+
+# records_of_interest.append(sys.argv[1])
 outfile_name = sys.argv[1]+".json"
 
 print(records_of_interest,outfile_name)
@@ -42,7 +58,7 @@ data = project.export_records(records=records_of_interest,fields=fields_of_inter
 
 #print(data)
 
-with open(outfile_name,'w') as outfile:
-	json.dump(data,outfile)
+# with open(outfile_name,'w') as outfile:
+# 	json.dump(data,outfile)
 	
 	
