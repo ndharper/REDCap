@@ -18,6 +18,7 @@ import csv
 
 
 import sys
+print(sys.executable)
 import os
 
 #
@@ -118,6 +119,8 @@ with open(args.output, 'w') as outfile:
                                     out_flags['scans_type_f'] += 1
                             except ValueError:
                                 print(f'{participationid} bad gestational age')
+
+
         if len(out_flags) > 0:  # will be unless we came out after finding void rec
             out_rec = {'participationid': participationid}
             out_rec['redcap_event_name'] = 'administrative_inf_arm_1'

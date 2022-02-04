@@ -1,0 +1,11 @@
+Variable,Formula
+pas_mother_1,"if(isblankormissingcode([{var}]),"""",0-[{var}])"
+pas_mother_2,"if(isblankormissingcode([{var}]),"""",0-[{var}])"
+pas_mother_3,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_4,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_5,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_6,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_7,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_8,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_9,"if(isblankormissingcode([{var}]),"""",[{var}])"
+pas_mother_10,"if(isblankormissingcode([{var}]),"""",[{var}])"

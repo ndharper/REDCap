@@ -1,0 +1,13 @@
+Variable,Formula
+bleq_mother_1_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_2_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_3_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_4_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_5_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_6_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_7_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_8_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_9_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_10_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_11_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
+bleq_mother_12_how_bad,"if(isblankormissingcode([{var}]),"""",[{var}])"
